@@ -3,9 +3,9 @@ package supernode
 import (
 	"context"
 	"fmt"
-	"time"
-
 	lumerasn "github.com/LumeraProtocol/lumera/x/supernode/types"
+	"supernode/pkg/logtrace"
+	"supernode/pkg/net"
 )
 
 // SuperNodeState defines possible states of a supernode.
@@ -73,15 +73,29 @@ type GetTopSupernodesForBlockResponse struct {
 }
 
 func (c *Client) GetTopSNsByBlockHeight(ctx context.Context, r GetTopSupernodesForBlockRequest) (GetTopSupernodesForBlockResponse, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
+	ctx = net.AddCorrelationID(ctx)
+
+	fields := logtrace.Fields{
+		logtrace.FieldMethod:         "GetTopSNsByBlockHeight",
+		logtrace.FieldModule:         logtrace.ValueActionSDK,
+		logtrace.FieldBlockHeight:    r.BlockHeight,
+		logtrace.FieldLimit:          r.Limit,
+		logtrace.FieldSupernodeState: r.State,
+	}
+	logtrace.Info(ctx, "fetching top supernodes for block", fields)
 
 	resp, err := c.supernodeService.GetTopSuperNodesForBlock(ctx, &lumerasn.QueryGetTopSuperNodesForBlockRequest{
-		BlockHeight: r.BlockHeight, Limit: r.Limit, State: lumerasn.SuperNodeState(r.State)})
+		BlockHeight: r.BlockHeight,
+		Limit:       r.Limit,
+		State:       lumerasn.SuperNodeState(r.State),
+	})
 	if err != nil {
+		fields[logtrace.FieldError] = err.Error()
+		logtrace.Error(ctx, "failed to fetch top supernodes", fields)
 		return GetTopSupernodesForBlockResponse{}, fmt.Errorf("failed to fetch lumera: %w", err)
 	}
 
+	logtrace.Info(ctx, "successfully fetched top supernodes", fields)
 	return toGetTopSNsForBlockResponse(resp), nil
 }
 
