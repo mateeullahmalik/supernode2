@@ -3,9 +3,10 @@ package supernode
 import (
 	"context"
 	"fmt"
+
 	lumerasn "github.com/LumeraProtocol/lumera/x/supernode/types"
-	"supernode/pkg/logtrace"
-	"supernode/pkg/net"
+	"github.com/LumeraProtocol/supernode/pkg/logtrace"
+	"github.com/LumeraProtocol/supernode/pkg/net"
 )
 
 // SuperNodeState defines possible states of a supernode.

@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package action;
+
+option go_package = "github.com/LumeraProtocol/supernode/gen/supernode/action";
+
+// Service definition
+service ActionService {
+// Get Health Check Status
+rpc CheckHealth(GetHealthCheckRequest) returns (GetHealthCheckResponse);
+}
+
+// Request and response messages
+message GetHealthCheckRequest {}
+
+message GetHealthCheckResponse {
+string status = 1;
+}
