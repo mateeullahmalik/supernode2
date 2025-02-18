@@ -111,33 +111,24 @@ func RunP2PDemo() {
 	defer cancel()
 
 	// Setup node addresses and their corresponding Lumera IDs
-	nodeConfigs := []struct {
-		address  string
-		lumeraID string
-	}{
+	nodeConfigs := &lumera.LumeraClientConfig{
 		{
-			address:  "127.0.0.1:9000",
-			lumeraID: "lumera1xdxm4tytunhhq5hs45nwxds3h73qu4hf9nnjhr",
+			Address:  "127.0.0.1:9000",
+			LumeraID: "lumera1xdxm4tytunhhq5hs45nwxds3h73qu4hf9nnjhr",
 		},
 		{
-			address:  "127.0.0.1:9001",
-			lumeraID: "lumera1xdxm4tytunhhq5hs45nwxds3h73qu4hf9nnjhr",
+			Address:  "127.0.0.1:9001",
+			LumeraID: "lumera1xdxm4tytunhhq5hs45nwxds3h73qu4hf9nnjhr",
 		},
 		{
-			address:  "127.0.0.1:9002",
-			lumeraID: "lumera1gx4a82h6fq8jhkn08a5k55k5a3e2ygktujtxca",
+			Address:  "127.0.0.1:9002",
+			LumeraID: "lumera1gx4a82h6fq8jhkn08a5k55k5a3e2ygktujtxca",
 		},
-	}
-
-	// Get all addresses for the mock client
-	var nodeAddresses []string
-	for _, config := range nodeConfigs {
-		nodeAddresses = append(nodeAddresses, config.address)
 	}
 
 	// Create and start nodes
-	for i, config := range nodeConfigs {
-		mockClient := lumera.NewLumeraClient(nodeAddresses)
+	for i, config := range *nodeConfigs {
+		mockClient := lumera.NewLumeraClient(*nodeConfigs)
 
 		// Create data directory for the node
 		dataDir := fmt.Sprintf("./data/node%d", i)
@@ -145,12 +136,18 @@ func RunP2PDemo() {
 			log.Fatalf("Failed to create data directory for node %d: %v", i, err)
 		}
 
+		// Collect addresses from previous nodes
+		bootstrapAddresses := make([]string, i)
+		for j := 0; j < i; j++ {
+			bootstrapAddresses[j] = (*nodeConfigs)[j].Address
+		}
+
 		p2pConfig := &p2p.Config{
 			ListenAddress: "127.0.0.1",
 			Port:          9000 + i,
 			DataDir:       dataDir,
-			ID:            config.lumeraID,
-			BootstrapIPs:  strings.Join(nodeAddresses[:i], ","),
+			ID:            config.LumeraID,
+			BootstrapIPs:  strings.Join(bootstrapAddresses, ","),
 		}
 
 		// Initialize SQLite RQ store for each node

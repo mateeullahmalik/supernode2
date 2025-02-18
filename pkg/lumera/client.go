@@ -2,7 +2,6 @@ package lumera
 
 import (
 	"context"
-	"fmt"
 )
 
 // TODO: Implement the LumeraClient interface
@@ -27,17 +26,19 @@ type LumeraClient struct {
 	nodes []MasterNode // list of nodes in our demo network
 }
 
-// NewLumeraClient creates a new mock client with pre-configured nodes
-func NewLumeraClient(nodeAddresses []string) *LumeraClient {
-	nodes := make([]MasterNode, len(nodeAddresses))
-	for i, addr := range nodeAddresses {
-		// Create a unique PastelID for each node
-		pastelID := fmt.Sprintf("jXY%d", i+1)
+type LumeraClientConfig []struct {
+	Address  string
+	LumeraID string
+}
 
+// NewLumeraClient creates a new mock client with pre-configured nodes
+func NewLumeraClient(nodeConfig LumeraClientConfig) *LumeraClient {
+	nodes := make([]MasterNode, len(nodeConfig))
+	for i, cfg := range nodeConfig {
 		nodes[i] = MasterNode{
-			ExtKey:     pastelID, // PastelID of the node
-			ExtAddress: addr,     // IP:Port for general communication
-			ExtP2P:     addr,     // Same address for P2P - in real network this might be different
+			ExtKey:     cfg.LumeraID, // LumeraID of the node
+			ExtAddress: cfg.Address,  // IP:Port for general communication
+			ExtP2P:     cfg.Address,  // Same address for P2P - in real network this might be different
 		}
 	}
 
