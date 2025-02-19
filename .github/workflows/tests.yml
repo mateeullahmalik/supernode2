@@ -1,0 +1,47 @@
+name: tests
+
+on:
+  push:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+
+jobs:
+  unit-tests:
+    name: unit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.23.2'
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Run unit tests
+        run: go test ./... -v
+
+  integration-tests:
+    name: integration
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.23.2'
+
+ 
+      - name: Run integration tests
+        run: go test -v -p 1 -count=1 -tags=integration ./...
+
+ 
