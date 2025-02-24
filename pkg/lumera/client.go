@@ -2,16 +2,39 @@ package lumera
 
 import (
 	"context"
+	tendermintv1beta1 "cosmossdk.io/api/cosmos/base/tendermint/v1beta1"
+	"github.com/cosmos/cosmos-sdk/client"
+
+	"github.com/cosmos/cosmos-sdk/types/tx"
 )
 
-// TODO: Implement the LumeraClient interface
-// This is a mock client that implements the LumeraClient interface just for demo purposes for use in p2p service
-
-type Client interface {
+type DummyClient interface {
 	MasterNodesExtra(ctx context.Context) (MasterNodes, error)
 	MasterNodesTop(ctx context.Context) (MasterNodes, error)
 	Sign(ctx context.Context, data []byte, pastelID string, passphrase string, algorithm string) (signature string, err error)
 	Verify(ctx context.Context, data []byte, signature string, pastelID string, algorithm string) (bool, error)
+}
+
+type Client struct {
+	cosmosSdk        client.Context
+	txClient         tx.ServiceClient
+	tendermintClient tendermintv1beta1.ServiceClient
+}
+
+type CosmosBase interface {
+	GetLatestBlock(ctx context.Context) (Block, error)
+	GetBlockByHeight(ctx context.Context, height int64) (Block, error)
+	BroadcastTx(ctx context.Context, req BroadcastRequest) (BroadcastResponse, error)
+	GetTx(ctx context.Context, req GetTxRequest) (GetTxResponse, error)
+}
+
+func NewTendermintClient(opts ...Option) (CosmosBase, error) {
+	c := &Client{}
+
+	// Apply all options to the client context
+	c.WithOptions(opts...)
+
+	return c, nil
 }
 
 type MasterNode struct {

@@ -78,7 +78,7 @@ func (c *Client) GetTopSNsByBlockHeight(ctx context.Context, r GetTopSupernodesF
 
 	fields := logtrace.Fields{
 		logtrace.FieldMethod:         "GetTopSNsByBlockHeight",
-		logtrace.FieldModule:         logtrace.ValueActionSDK,
+		logtrace.FieldModule:         logtrace.ValueLumeraSDK,
 		logtrace.FieldBlockHeight:    r.BlockHeight,
 		logtrace.FieldLimit:          r.Limit,
 		logtrace.FieldSupernodeState: r.State,
