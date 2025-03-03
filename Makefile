@@ -1,5 +1,5 @@
 # Simple test targets
-.PHONY: test test-unit test-integration test-system
+.PHONY: test-unit test-integration test-system tests-system-setup
 
 # Run unit tests (regular tests with code)
 test-unit:
@@ -11,7 +11,7 @@ test-integration:
 
 # Run system tests
 test-system:
-	go test -v -tags=system ./...
+	cd tests/system && go test -tags=system_test -v .
 
-# Run all tests
-test: test-unit test-integration test-system
+tests-system-setup:
+	cd tests/scripts && ./install-lumera.sh

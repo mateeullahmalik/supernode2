@@ -9,7 +9,7 @@ on:
 
 jobs:
   unit-tests:
-    name: unit
+    name: unit-tests
     runs-on: ubuntu-latest
 
     steps:
@@ -28,7 +28,23 @@ jobs:
         run: go test ./... -v
 
   integration-tests:
-    name: integration
+    name: integration-tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.23.2'
+ 
+      - name: Run integration tests
+        run: go test -v -p 1 -count=1 -tags=integration ./...
+
+  system-tests:
+    name: system-tests
     runs-on: ubuntu-latest
 
     steps:
@@ -40,8 +56,11 @@ jobs:
         with:
           go-version: '1.23.2'
 
- 
-      - name: Run integration tests
-        run: go test -v -p 1 -count=1 -tags=integration ./...
+      - name: Install dependencies
+        run: cd tests/system && go mod download
 
+      - name: Install lumera
+        run: cd tests/scripts && ./install-lumera.sh
  
+      - name: Run system tests
+        run: go test -tags=system_test -v .
