@@ -61,6 +61,9 @@ jobs:
 
       - name: Install lumera
         run: cd tests/scripts && ./install-lumera.sh
+        
+      - name: Copy CSV file to home directory
+        run: cp claims.csv ~/
  
       - name: Run system tests
-        run: go test -tags=system_test -v .
+        run: cd tests/system && go test -tags=system_test -v .
