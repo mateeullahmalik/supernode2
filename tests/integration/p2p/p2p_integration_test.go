@@ -1,4 +1,6 @@
-package p2pdemo
+//go:build integration
+
+package integration
 
 import (
 	"bytes"
