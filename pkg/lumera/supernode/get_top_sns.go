@@ -36,11 +36,7 @@ func (c *Client) GetTopSNsByBlockHeight(ctx context.Context, r GetTopSupernodesF
 	resp, err := c.supernodeService.GetTopSuperNodesForBlock(ctx, &QueryGetTopSuperNodesForBlockRequest{
 		BlockHeight: r.BlockHeight,
 		Limit:       r.Limit,
-<<<<<<< HEAD
 		State:       r.State.String(),
-=======
-		State:       string(r.State),
->>>>>>> 00d1360 (implement action client from lumera-sdk)
 	})
 	if err != nil {
 		fields[logtrace.FieldError] = err.Error()
