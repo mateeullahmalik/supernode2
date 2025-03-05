@@ -12,5 +12,10 @@ const (
 	FieldBlockHeight    = "block_height"
 	FieldLimit          = "limit"
 	FieldSupernodeState = "supernode_state"
+	FieldRequest        = "request"
+
+	ValueLumeraSDK      = "lumera-sdk"
 	ValueActionSDK      = "action-sdk"
+	ValueTransaction    = "cosmos-tx"
+	ValueBaseTendermint = "tendermint"
 )
