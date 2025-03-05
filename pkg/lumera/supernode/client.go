@@ -18,7 +18,7 @@ type Client struct {
 
 type Service interface {
 	GetTopSNsByBlockHeight(ctx context.Context, r GetTopSupernodesForBlockRequest) (GetTopSupernodesForBlockResponse, error)
-	GetSupernodeByAddress(ctx context.Context, r GetSupernodeRequest) (Supernode, error)
+	GetSupernodeByAddress(ctx context.Context, r GetSupernodeRequest) (SuperNode, error)
 }
 
 func NewClient(serverAddr string) (Service, error) {
