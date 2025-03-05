@@ -5,11 +5,13 @@ go 1.24.0
 replace (
 	github.com/LumeraProtocol/lumera => ../lumera
 	github.com/LumeraProtocol/supernode => .
+	github.com/LumeraProtocol/rq-service => ../rq-service/gen
 )
 
 require (
 	cosmossdk.io/api v0.7.6
-	github.com/LumeraProtocol/lumera v0.0.0-20250301122440-0478948af353
+	github.com/LumeraProtocol/lumera v0.4.1
+	github.com/LumeraProtocol/rq-service v0.0.0-00010101000000-000000000000
 	github.com/btcsuite/btcutil v1.0.3-0.20201208143702-a53e38424cce
 	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/cosmos/btcutil v1.0.5
