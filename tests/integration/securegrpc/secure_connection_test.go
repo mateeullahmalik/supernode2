@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"regexp"
 	"testing"
 	"time"
-	"regexp"
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/grpclog"
@@ -21,9 +21,9 @@ import (
 	pb "github.com/LumeraProtocol/supernode/gen/supernode/tests/integration/securegrpc"
 	ltc "github.com/LumeraProtocol/supernode/pkg/net/credentials"
 	"github.com/LumeraProtocol/supernode/pkg/net/credentials/alts/conn"
-	"github.com/LumeraProtocol/supernode/pkg/testutil"
 	"github.com/LumeraProtocol/supernode/pkg/net/grpc/client"
 	"github.com/LumeraProtocol/supernode/pkg/net/grpc/server"
+	"github.com/LumeraProtocol/supernode/pkg/testutil"
 )
 
 func waitForServerReady(address string, timeout time.Duration) error {
@@ -48,7 +48,7 @@ func (s *TestServiceImpl) TestMethod(ctx context.Context, req *pb.TestRequest) (
 	// request is "Hello Lumera Server! I'm [TestClient]!"
 	re := regexp.MustCompile(`\[(.*?)\]`)
 	matches := re.FindStringSubmatch(req.Message)
-	
+
 	clientName := "Unknown Client"
 	if len(matches) > 1 {
 		clientName = matches[1]
