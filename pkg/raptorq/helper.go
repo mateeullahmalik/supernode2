@@ -171,7 +171,7 @@ func GetIDFiles(ctx context.Context, file []byte, ic uint32, max uint32) (ids []
 
 		idFiles = append(idFiles, compressedData)
 
-		hash, err := utils.Sha3256hash(compressedData)
+		hash, err := utils.Blake3Hash(compressedData)
 		if err != nil {
 			return ids, idFiles, errors.Errorf("sha3-256-hash error getting an id file: %w", err)
 		}

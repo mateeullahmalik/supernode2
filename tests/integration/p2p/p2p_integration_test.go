@@ -93,7 +93,7 @@ func TestP2PBasicIntegration(t *testing.T) {
 			data := []byte(fmt.Sprintf("batch data %d", i))
 			batchData[i] = data
 			// Use the same hashing algorithm as the store
-			hash, _ := utils.Sha3256hash(data)
+			hash, _ := utils.Blake3Hash(data)
 			key := base58.Encode(hash)
 			expectedKeys = append(expectedKeys, key)
 			log.Printf("Batch data %d: %s, Expected key: %s", i, data, key)
