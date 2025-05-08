@@ -1,9 +1,10 @@
 module github.com/LumeraProtocol/supernode
 
-go 1.24.0
+go 1.24.1
 
 require (
-	github.com/LumeraProtocol/lumera v0.4.4
+	github.com/LumeraProtocol/lumera v0.4.5
+	github.com/LumeraProtocol/rq-go v0.2.1
 	github.com/btcsuite/btcutil v1.0.3-0.20201208143702-a53e38424cce
 	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/cosmos/btcutil v1.0.5
@@ -13,6 +14,7 @@ require (
 	github.com/disintegration/imaging v1.6.2
 	github.com/go-errors/errors v1.5.1
 	github.com/golang/mock v1.6.0
+	github.com/golang/protobuf v1.5.4
 	github.com/google/uuid v1.6.0
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/json-iterator/go v1.1.12
@@ -44,7 +46,7 @@ require (
 	cosmossdk.io/depinject v1.1.0 // indirect
 	cosmossdk.io/errors v1.0.2 // indirect
 	cosmossdk.io/log v1.5.0 // indirect
-	cosmossdk.io/math v1.5.1 // indirect
+	cosmossdk.io/math v1.5.3 // indirect
 	cosmossdk.io/store v1.1.1 // indirect
 	cosmossdk.io/x/tx v0.13.7 // indirect
 	filippo.io/edwards25519 v1.1.0 // indirect
@@ -96,7 +98,6 @@ require (
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/glog v1.2.4 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
-	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/golang/snappy v0.0.5-0.20220116011046-fa5810519dcb // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/flatbuffers v1.12.1 // indirect

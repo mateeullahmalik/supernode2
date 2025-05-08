@@ -20,7 +20,6 @@ import (
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
 	"github.com/cosmos/cosmos-sdk/std"
-	sdk "github.com/cosmos/cosmos-sdk/types"
 )
 
 type (
@@ -40,7 +39,7 @@ func NewLumeradCLI(t *testing.T, sut *SystemUnderTest, verbose bool) *LumeradCli
 		sut.AwaitNextBlock,
 		sut.nodesCount,
 		filepath.Join(WorkDir, sut.outputDir),
-		"1"+sdk.DefaultBondDenom,
+		"1"+"ulume",
 		verbose,
 		assert.NoError,
 		true,
@@ -289,6 +288,15 @@ func (c LumeradCli) GetKeyAddr(name string) string {
 }
 
 const defaultSrcAddr = "node0"
+
+func (c LumeradCli) FundAddressWithNode(destAddr, amount string, nodeAddr string) string {
+	require.NotEmpty(c.t, destAddr)
+	require.NotEmpty(c.t, amount)
+	cmd := []string{"tx", "bank", "send", nodeAddr, destAddr, amount}
+	rsp := c.CustomCommand(cmd...)
+	RequireTxSuccess(c.t, rsp)
+	return rsp
+}
 
 // FundAddress sends the token amount to the destination address
 func (c LumeradCli) FundAddress(destAddr, amount string) string {

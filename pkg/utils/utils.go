@@ -11,11 +11,9 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"lukechampine.com/blake3"
 	"math"
 	"math/big"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"lukechampine.com/blake3"
 
 	"github.com/LumeraProtocol/supernode/pkg/errors"
 	"golang.org/x/sync/semaphore"
@@ -36,6 +36,41 @@ const (
 	highCompressTimeout          = 30 * time.Minute
 	highCompressionLevel         = 4
 )
+
+var ipEndpoints = []string{
+	"https://api.ipify.org",
+	"https://ifconfig.co/ip",
+	"https://checkip.amazonaws.com",
+	"https://ipv4.icanhazip.com",
+}
+
+// GetExternalIPAddress returns the first valid public IP obtained
+// from a list of providers, or an error if none work.
+// func GetExternalIPAddress() (string, error) {
+// 	client := &http.Client{Timeout: 4 * time.Second}
+
+// 	for _, url := range ipEndpoints {
+// 		req, _ := http.NewRequest(http.MethodGet, url, nil)
+
+// 		resp, err := client.Do(req)
+// 		if err != nil {
+// 			continue // provider down? try next
+// 		}
+
+// 		body, err := io.ReadAll(resp.Body)
+// 		resp.Body.Close()
+// 		if err != nil {
+// 			continue
+// 		}
+
+// 		ip := strings.TrimSpace(string(body))
+// 		if net.ParseIP(ip) != nil {
+// 			return ip, nil
+// 		}
+// 	}
+
+// 	return "", errors.New("unable to determine external IP address from any provider")
+// }
 
 var sem = semaphore.NewWeighted(maxParallelHighCompressCalls)
 
@@ -99,24 +134,25 @@ func IsContextErr(err error) bool {
 
 // GetExternalIPAddress returns external IP address
 func GetExternalIPAddress() (externalIP string, err error) {
+	return "localhost", nil
+	/*
+		resp, err := http.Get("https://api.ipify.org")
+		if err != nil {
+			return "", err
+		}
 
-	resp, err := http.Get("http://ipinfo.io/ip")
-	if err != nil {
-		return "", err
-	}
+		defer resp.Body.Close()
 
-	defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return "", err
+		}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
+		if net.ParseIP(string(body)) == nil {
+			return "", errors.Errorf("invalid IP response from %s", "ipconf.ip")
+		}
 
-	if net.ParseIP(string(body)) == nil {
-		return "", errors.Errorf("invalid IP response from %s", "ipconf.ip")
-	}
-
-	return string(body), nil
+		return string(body), nil */
 }
 
 // B64Encode base64 encodes
@@ -383,6 +419,16 @@ func RandomDuration(min, max int) time.Duration {
 	return time.Duration(randomMillisecond) * time.Millisecond
 }
 
+func ZstdCompress(data []byte) ([]byte, error) {
+	encoder, err := zstd.NewWriter(nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create zstd encoder: %v", err)
+	}
+	defer encoder.Close()
+
+	return encoder.EncodeAll(data, nil), nil
+}
+
 // HighCompress compresses the data
 func HighCompress(cctx context.Context, data []byte) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(cctx, highCompressTimeout)
@@ -420,9 +466,10 @@ func HighCompress(cctx context.Context, data []byte) ([]byte, error) {
 
 // LoadSymbols takes a directory path and a map where keys are filenames. It reads each file in the directory
 // corresponding to the keys in the map and updates the map with the content of the files as byte slices.
-func LoadSymbols(dir string, keys map[string][]byte) (map[string][]byte, error) {
+func LoadSymbols(dir string, keys []string) (ret [][]byte, err error) {
 	// Iterate over the map keys which are filenames
-	for filename := range keys {
+	ret = make([][]byte, 0, len(keys))
+	for _, filename := range keys {
 		// Construct the full path to the file
 		fullPath := filepath.Join(dir, filename)
 
@@ -433,17 +480,17 @@ func LoadSymbols(dir string, keys map[string][]byte) (map[string][]byte, error) 
 		}
 
 		// Update the map with the file data
-		keys[filename] = data
+		ret = append(ret, data)
 	}
 
 	// Return the updated map
-	return keys, nil
+	return ret, nil
 }
 
 // DeleteSymbols takes a directory path and a map where keys are filenames. It deletes each file in the directory
-func DeleteSymbols(ctx context.Context, dir string, keys map[string][]byte) error {
+func DeleteSymbols(ctx context.Context, dir string, keys []string) error {
 	// Iterate over the map keys which are filenames
-	for filename := range keys {
+	for _, filename := range keys {
 		// Construct the full path to the file
 		fullPath := filepath.Join(dir, filename)
 
@@ -456,30 +503,39 @@ func DeleteSymbols(ctx context.Context, dir string, keys map[string][]byte) erro
 	return nil
 }
 
-// ReadDirFilenames reads all the filenames in a directory and returns them in a map with the filename as the key
+// ReadDirFilenames returns a map whose keys are "block_*/file" paths, values nil.
 func ReadDirFilenames(dirPath string) (map[string][]byte, error) {
-	idMap := make(map[string][]byte) // Map to store file names
+	idMap := make(map[string][]byte)
 
-	err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return errors.Errorf("scan a path %s: %w", path, err)
-		}
-
-		if info.IsDir() {
-			return nil // Skip directories
-		}
-
-		fileID := filepath.Base(path)
-		idMap[fileID] = nil // Store the file name with a nil value in the map
-
-		return nil
-	})
-
+	entries, err := os.ReadDir(dirPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read base dir: %w", err)
 	}
 
-	// Here you might want to do something with idMap or just return it
+	for _, ent := range entries {
+		if !ent.IsDir() {
+			// file at root (rare) – keep backward-compat
+			if ent.Name() == "_raptorq_layout.json" {
+				continue
+			}
+			idMap[ent.Name()] = nil
+			continue
+		}
+
+		blockDir := filepath.Join(dirPath, ent.Name())
+		files, err := os.ReadDir(blockDir)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", blockDir, err)
+		}
+		for _, f := range files {
+			if f.IsDir() || f.Name() == "_raptorq_layout.json" {
+				continue
+			}
+			rel := filepath.Join(ent.Name(), f.Name()) // "block_0/abc.sym"
+			idMap[rel] = nil
+		}
+	}
+
 	return idMap, nil
 }
 

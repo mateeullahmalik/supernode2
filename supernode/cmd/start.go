@@ -11,14 +11,15 @@ import (
 	"github.com/LumeraProtocol/supernode/p2p"
 	"github.com/LumeraProtocol/supernode/p2p/kademlia/store/cloud.go"
 	"github.com/LumeraProtocol/supernode/p2p/kademlia/store/sqlite"
+	"github.com/LumeraProtocol/supernode/pkg/codec"
 	"github.com/LumeraProtocol/supernode/pkg/keyring"
 	"github.com/LumeraProtocol/supernode/pkg/logtrace"
 	"github.com/LumeraProtocol/supernode/pkg/lumera"
-	"github.com/LumeraProtocol/supernode/pkg/raptorq"
 	"github.com/LumeraProtocol/supernode/pkg/storage/rqstore"
 	"github.com/LumeraProtocol/supernode/supernode/config"
+	"github.com/LumeraProtocol/supernode/supernode/node/action/server/cascade"
 	"github.com/LumeraProtocol/supernode/supernode/node/supernode/server"
-	"github.com/LumeraProtocol/supernode/supernode/services/cascade"
+	cascadeService "github.com/LumeraProtocol/supernode/supernode/services/cascade"
 	"github.com/LumeraProtocol/supernode/supernode/services/common"
 
 	cKeyring "github.com/cosmos/cosmos-sdk/crypto/keyring"
@@ -42,14 +43,14 @@ The supernode will connect to the Lumera network and begin participating in the 
 		// Log configuration info
 		logtrace.Info(ctx, "Starting supernode with configuration", logtrace.Fields{
 			"config_file": cfgFile,
-			"keyring_dir": appConfig.KeyringConfig.Dir,
+			"keyring_dir": appConfig.GetKeyringDir(),
 			"key_name":    appConfig.SupernodeConfig.KeyName,
 		})
 
 		// Initialize keyring
 		kr, err := keyring.InitKeyring(
 			appConfig.KeyringConfig.Backend,
-			appConfig.KeyringConfig.Dir,
+			appConfig.GetKeyringDir(),
 		)
 		if err != nil {
 			logtrace.Error(ctx, "Failed to initialize keyring", logtrace.Fields{
@@ -59,7 +60,7 @@ The supernode will connect to the Lumera network and begin participating in the 
 		}
 
 		// Initialize Lumera client
-		lumeraClient, err := initLumeraClient(ctx, appConfig)
+		lumeraClient, err := initLumeraClient(ctx, appConfig, kr)
 		if err != nil {
 			return fmt.Errorf("failed to initialize Lumera client: %w", err)
 		}
@@ -85,45 +86,43 @@ The supernode will connect to the Lumera network and begin participating in the 
 			return err
 		}
 
-		// Initialize RaptorQ client connection
-		raptorQClientConnection, err := raptorq.NewClient().Connect(ctx, appConfig.RaptorQConfig.ServiceAddress)
-		if err != nil {
-			logtrace.Error(ctx, "Failed to initialize raptor q client connection interface", logtrace.Fields{
-				"error": err.Error(),
-			})
-			return err
-		}
-
 		// Configure cascade service
-		cascadeService := cascade.NewCascadeService(
-			&cascade.Config{
+		cService := cascadeService.NewCascadeService(
+			&cascadeService.Config{
 				Config: common.Config{
-					SupernodeAccountAddress: appConfig.SupernodeConfig.KeyName,
+					SupernodeAccountAddress: appConfig.SupernodeConfig.Identity,
 				},
-				RaptorQServicePort:    fmt.Sprintf("%d", appConfig.RaptorQConfig.ServicePort),
-				RaptorQServiceAddress: appConfig.RaptorQConfig.ServiceAddress,
-				RqFilesDir:            appConfig.RaptorQConfig.FilesDir,
-				NumberConnectedNodes:  1,
+				RqFilesDir: appConfig.GetRaptorQFilesDir(),
 			},
 			lumeraClient,
-			nil,
 			*p2pService,
-			raptorQClientConnection.RaptorQ(raptorq.NewConfig(), lumeraClient, rqStore),
-			raptorq.NewClient(),
+			codec.NewRaptorQCodec(appConfig.GetRaptorQFilesDir()),
 			rqStore,
 		)
 
+		// Create cascade action server
+		cascadeActionServer := cascade.NewCascadeActionServer(cService)
+
+		// Configure server
 		serverConfig := &server.Config{
-			ListenAddresses: appConfig.SupernodeConfig.IpAddress, // FIXME : confirm
-			Port:            int(appConfig.SupernodeConfig.Port), // FIXME : confirm
+
+			Identity:        appConfig.SupernodeConfig.Identity,
+			ListenAddresses: appConfig.SupernodeConfig.IpAddress,
+			Port:            int(appConfig.SupernodeConfig.Port),
 		}
-		grpc := server.New(serverConfig,
+
+		// Create gRPC server
+		grpcServer, err := server.New(serverConfig,
 			"service",
-			cascadeService,
+			kr,
+			cascadeActionServer,
 		)
+		if err != nil {
+			return fmt.Errorf("failed to create gRPC server: %w", err)
+		}
 
 		// Start the services
-		RunServices(ctx, grpc, cascadeService, *p2pService)
+		RunServices(ctx, grpcServer, cService, *p2pService)
 
 		// Set up signal handling for graceful shutdown
 		sigCh := make(chan os.Signal, 1)
@@ -159,7 +158,7 @@ func initP2PService(ctx context.Context, config *config.Config, lumeraClient lum
 	p2pConfig := &p2p.Config{
 		ListenAddress:  config.P2PConfig.ListenAddress,
 		Port:           config.P2PConfig.Port,
-		DataDir:        config.P2PConfig.DataDir,
+		DataDir:        config.GetP2PDataDir(),
 		BootstrapNodes: config.P2PConfig.BootstrapNodes,
 		ExternalIP:     config.P2PConfig.ExternalIP,
 		ID:             address.String(),

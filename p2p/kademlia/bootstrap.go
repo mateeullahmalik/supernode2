@@ -3,12 +3,14 @@ package kademlia
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/LumeraProtocol/supernode/pkg/errors"
+	"github.com/LumeraProtocol/supernode/pkg/utils"
 
 	"github.com/LumeraProtocol/supernode/pkg/log"
 	ltc "github.com/LumeraProtocol/supernode/pkg/net/credentials"
@@ -20,10 +22,10 @@ const (
 )
 
 func (s *DHT) skipBadBootstrapAddrs() {
-	skipAddress1 := fmt.Sprintf("%s:%d", "127.0.0.1", s.options.Port)
-	skipAddress2 := fmt.Sprintf("%s:%d", "localhost", s.options.Port)
-	s.cache.Set(skipAddress1, []byte("true"))
-	s.cache.Set(skipAddress2, []byte("true"))
+	//skipAddress1 := fmt.Sprintf("%s:%d", "127.0.0.1", s.options.Port)
+	//skipAddress2 := fmt.Sprintf("%s:%d", "localhost", s.options.Port)
+	//s.cache.Set(skipAddress1, []byte("true"))
+	//s.cache.Set(skipAddress2, []byte("true"))
 }
 
 func (s *DHT) parseNode(extP2P string, selfAddr string) (*Node, error) {
@@ -31,9 +33,10 @@ func (s *DHT) parseNode(extP2P string, selfAddr string) (*Node, error) {
 		return nil, errors.New("empty address")
 	}
 
-	if strings.Contains(extP2P, "0.0.0.0") {
+	/*if strings.Contains(extP2P, "0.0.0.0") {
+		fmt.Println("skippping node")
 		return nil, errors.New("invalid address")
-	}
+	}*/
 
 	if extP2P == selfAddr {
 		return nil, errors.New("self address")
@@ -132,18 +135,14 @@ func (s *DHT) ConfigureBootstrapNodes(ctx context.Context, bootstrapNodes string
 			}
 
 			if latestIP == "" {
-				log.P2P().WithContext(ctx).
-					WithField("supernode", supernode.SupernodeAccount).
-					Warn("No valid IP address found for supernode")
+				log.P2P().WithContext(ctx).WithField("supernode", supernode.SupernodeAccount).Warn("No valid IP address found for supernode")
 				continue
 			}
 
 			// Parse the node from the IP address
 			node, err := s.parseNode(latestIP, selfAddress)
 			if err != nil {
-				log.P2P().WithContext(ctx).WithError(err).
-					WithField("address", latestIP).
-					WithField("supernode", supernode.SupernodeAccount).
+				log.P2P().WithContext(ctx).WithError(err).WithField("address", latestIP).WithField("supernode", supernode.SupernodeAccount).
 					Warn("Skip Bad Bootstrap Address")
 				continue
 			}
@@ -155,21 +154,24 @@ func (s *DHT) ConfigureBootstrapNodes(ctx context.Context, bootstrapNodes string
 
 		// Convert the map to a slice
 		for _, node := range mapNodes {
+			if os.Getenv("INTEGRATION_TEST") != "true" {
+				node.Port = node.Port + 1
+			}
+			hID, _ := utils.Blake3Hash(node.ID)
+			node.HashedID = hID
+			fmt.Println("node adding", node.String(), "hashed id", string(node.HashedID))
 			boostrapNodes = append(boostrapNodes, node)
 		}
 	}
 
 	if len(boostrapNodes) == 0 {
-		log.P2P().WithContext(ctx).Error("unable to fetch bootstrap IP addresses. No valid supernodes found.")
+		log.WithContext(ctx).Error("unable to fetch bootstrap IP addresses. No valid supernodes found.")
 		return nil
 	}
 
 	for _, node := range boostrapNodes {
-		log.P2P().WithContext(ctx).WithFields(log.Fields{
-			"bootstap_ip":    node.IP,
-			"bootstrap_port": node.Port,
-			"node_id":        string(node.ID),
-		}).Info("adding p2p bootstrap node")
+		log.WithContext(ctx).WithFields(log.Fields{"bootstap_ip": node.IP, "bootstrap_port": node.Port, "node_id": string(node.ID)}).
+			Info("adding p2p bootstrap node")
 	}
 
 	s.options.BootstrapNodes = append(s.options.BootstrapNodes, boostrapNodes...)

@@ -16,6 +16,7 @@ import (
 
 	"github.com/LumeraProtocol/supernode/p2p"
 	"github.com/LumeraProtocol/supernode/p2p/kademlia"
+	snkeyring "github.com/LumeraProtocol/supernode/pkg/keyring"
 	ltc "github.com/LumeraProtocol/supernode/pkg/net/credentials"
 	"github.com/LumeraProtocol/supernode/pkg/net/credentials/alts/conn"
 	"github.com/LumeraProtocol/supernode/pkg/storage/rqstore"
@@ -26,6 +27,9 @@ import (
 func TestP2PBasicIntegration(t *testing.T) {
 	log.Println("Starting P2P test...")
 
+	os.Setenv("INTEGRATION_TEST", "true")
+	defer os.Unsetenv("INTEGRATION_TEST")
+	snkeyring.InitSDKConfig()
 	conn.RegisterALTSRecordProtocols()
 	defer conn.UnregisterALTSRecordProtocols()
 

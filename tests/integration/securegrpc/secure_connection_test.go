@@ -23,6 +23,7 @@ import (
 	"github.com/LumeraProtocol/supernode/pkg/net/credentials/alts/conn"
 	"github.com/LumeraProtocol/supernode/pkg/net/grpc/client"
 	"github.com/LumeraProtocol/supernode/pkg/net/grpc/server"
+	snkeyring "github.com/LumeraProtocol/supernode/pkg/keyring"
 	"github.com/LumeraProtocol/supernode/pkg/testutil"
 )
 
@@ -32,7 +33,6 @@ func waitForServerReady(address string, timeout time.Duration) error {
 		conn, err := net.Dial("tcp", address)
 		if err == nil {
 			conn.Close()
-			fmt.Println("Server is ready and accepting connections.")
 			return nil
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -58,6 +58,8 @@ func (s *TestServiceImpl) TestMethod(ctx context.Context, req *pb.TestRequest) (
 }
 
 func TestSecureGRPCConnection(t *testing.T) {
+	snkeyring.InitSDKConfig()
+
 	conn.RegisterALTSRecordProtocols()
 	defer conn.UnregisterALTSRecordProtocols()
 

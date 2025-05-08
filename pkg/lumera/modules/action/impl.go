@@ -36,7 +36,6 @@ func (m *module) GetAction(ctx context.Context, actionID string) (*types.QueryGe
 	return resp, nil
 }
 
-
 // GetActionFee calculates fee for processing data with given size
 func (m *module) GetActionFee(ctx context.Context, dataSize string) (*types.QueryGetActionFeeResponse, error) {
 	resp, err := m.client.GetActionFee(ctx, &types.QueryGetActionFeeRequest{
@@ -49,3 +48,12 @@ func (m *module) GetActionFee(ctx context.Context, dataSize string) (*types.Quer
 	return resp, nil
 }
 
+// GetParams fetches the action module parameters
+func (m *module) GetParams(ctx context.Context) (*types.QueryParamsResponse, error) {
+	resp, err := m.client.Params(ctx, &types.QueryParamsRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get action params: %w", err)
+	}
+
+	return resp, nil
+}

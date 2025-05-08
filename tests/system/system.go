@@ -26,7 +26,6 @@ import (
 	"github.com/tidwall/sjson"
 
 	"github.com/cosmos/cosmos-sdk/server"
-	sdk "github.com/cosmos/cosmos-sdk/types"
 )
 
 var (
@@ -90,9 +89,10 @@ func NewSystemUnderTest(execBinary string, verbose bool, nodesCount int, blockTi
 		errBuff:           ring.New(100),
 		out:               os.Stdout,
 		verbose:           verbose,
-		minGasPrice:       fmt.Sprintf("0.000001%s", sdk.DefaultBondDenom),
-		projectName:       nameTokens[0],
-		pids:              make(map[int]struct{}, nodesCount),
+		// minGasPrice:       fmt.Sprintf("0.000001%s", sdk.DefaultBondDenom),
+		minGasPrice: fmt.Sprintf("0.000001%s", "ulume"),
+		projectName: nameTokens[0],
+		pids:        make(map[int]struct{}, nodesCount),
 	}
 }
 
@@ -733,7 +733,6 @@ func (n Node) RPCAddr() string {
 	return fmt.Sprintf("tcp://%s:%d", n.IP, n.RPCPort)
 }
 
-// locateExecutable looks up the binary on the OS path.
 func locateExecutable(file string) string {
 	if strings.TrimSpace(file) == "" {
 		panic("executable binary name must not be empty")

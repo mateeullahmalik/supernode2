@@ -88,12 +88,12 @@ func newHandshaker(keyExchange securekeyx.KeyExchanger, conn net.Conn, remoteAdd
 	side Side, timeout time.Duration, opts interface{}) *secureHandshaker {
 
 	hs := &secureHandshaker{
-		conn:        conn,
+		conn:         conn,
 		keyExchanger: keyExchange,
-		remoteAddr:  remoteAddr,
-		side:        side,
-		protocol:    RecordProtocolXChaCha20Poly1305ReKey, // Default to XChaCha20-Poly1305
-		timeout:     timeout,
+		remoteAddr:   remoteAddr,
+		side:         side,
+		protocol:     RecordProtocolXChaCha20Poly1305ReKey, // Default to XChaCha20-Poly1305
+		timeout:      timeout,
 	}
 
 	if side == ClientSide {

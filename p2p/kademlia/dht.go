@@ -147,11 +147,15 @@ func NewDHT(ctx context.Context, store Store, metaStore MetaStore, options *Opti
 	return s, nil
 }
 
+func (s *DHT) NodesLen() int {
+	return len(s.ht.nodes())
+}
+
 func (s *DHT) getExternalIP() (string, error) {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 	// if listen IP is localhost - then return itself
-	if s.ht.self.IP == "127.0.0.1" || s.ht.self.IP == "localhost" {
+	if s.ht.self.IP == "127.0.0.1" || s.ht.self.IP == "localhost" || s.ht.self.IP == "0.0.0.0" {
 		return s.ht.self.IP, nil
 	}
 
@@ -1256,13 +1260,14 @@ func (s *DHT) IterateBatchStore(ctx context.Context, values [][]byte, typ int, i
 	contacted := make(map[string]bool)
 	hashes := make([][]byte, len(values))
 
-	log.WithContext(ctx).WithField("task-id", id).WithField("keys", len(values)).Info("iterate batch store begin")
+	log.WithContext(ctx).WithField("task-id", id).WithField("keys", len(values)).WithField("len nodes", len(s.ht.nodes())).Info("iterate batch store begin")
 	for i := 0; i < len(values); i++ {
 		target, _ := utils.Blake3Hash(values[i])
 		hashes[i] = target
 		top6 := s.ht.closestContactsWithInlcudingNode(Alpha, target, s.ignorelist.ToNodeList(), nil)
 
 		globalClosestContacts[base58.Encode(target)] = top6
+		// log.WithContext(ctx).WithField("top 6", top6).Info("iterate batch store begin")
 		s.addKnownNodes(ctx, top6.Nodes, knownNodes)
 	}
 
@@ -1276,6 +1281,7 @@ func (s *DHT) IterateBatchStore(ctx context.Context, values [][]byte, typ int, i
 		responses, atleastOneContacted := s.batchFindNode(ctx, hashes, knownNodes, contacted, id)
 
 		if !atleastOneContacted {
+			log.WithContext(ctx).Info("Break")
 			break
 		}
 
@@ -1399,6 +1405,7 @@ func (s *DHT) batchStoreNetwork(ctx context.Context, values [][]byte, nodes map[
 	var wg sync.WaitGroup
 
 	for key, node := range nodes {
+		log.WithContext(ctx).WithField("Port#", node.String()).Info("node")
 		if s.ignorelist.Banned(node) {
 			log.WithContext(ctx).WithField("node", node.String()).Debug("Ignoring banned node in batch store network call")
 			continue
