@@ -7,6 +7,7 @@ import (
 	pb "github.com/LumeraProtocol/supernode/gen/supernode/action/cascade"
 	"github.com/LumeraProtocol/supernode/pkg/logtrace"
 	cascadeService "github.com/LumeraProtocol/supernode/supernode/services/cascade"
+
 	"google.golang.org/grpc"
 )
 
@@ -53,13 +54,14 @@ func (server *CascadeActionServer) Register(stream pb.CascadeService_RegisterSer
 		// Check which type of message we received
 		switch x := req.RequestType.(type) {
 		case *pb.RegisterRequest_Chunk:
-			// Add data chunk to our collection
-			allData = append(allData, x.Chunk.Data...)
-			logtrace.Info(ctx, "received data chunk", logtrace.Fields{
-				"chunk_size":        len(x.Chunk.Data),
-				"total_size_so_far": len(allData),
-			})
-
+			if x.Chunk != nil {
+				// Add data chunk to our collection
+				allData = append(allData, x.Chunk.Data...)
+				logtrace.Info(ctx, "received data chunk", logtrace.Fields{
+					"chunk_size":        len(x.Chunk.Data),
+					"total_size_so_far": len(allData),
+				})
+			}
 		case *pb.RegisterRequest_Metadata:
 			// Store metadata - this should be the final message
 			metadata = x.Metadata
@@ -78,21 +80,32 @@ func (server *CascadeActionServer) Register(stream pb.CascadeService_RegisterSer
 
 	// Process the complete data
 	task := server.service.NewCascadeRegistrationTask()
-	res, err := task.Register(ctx, &cascadeService.RegisterRequest{
+	err := task.Register(ctx, &cascadeService.RegisterRequest{
 		TaskID:   metadata.TaskId,
 		ActionID: metadata.ActionId,
 		Data:     allData,
+	}, func(resp *cascadeService.RegisterResponse) error {
+		grpcResp := &pb.RegisterResponse{
+			EventType: pb.SupernodeEventType(resp.EventType),
+			Message:   resp.Message,
+			TxHash:    resp.TxHash,
+		}
+		if err := stream.Send(grpcResp); err != nil {
+			logtrace.Error(ctx, "failed to send response to client", logtrace.Fields{
+				logtrace.FieldError: err.Error(),
+			})
+			return err
+		}
+		return nil
 	})
 
 	if err != nil {
-		fields[logtrace.FieldError] = err.Error()
-		logtrace.Error(ctx, "failed to upload input data", fields)
-		return fmt.Errorf("cascade services upload input data error: %w", err)
+		logtrace.Error(ctx, "registration task failed", logtrace.Fields{
+			logtrace.FieldError: err.Error(),
+		})
+		return fmt.Errorf("registration failed: %w", err)
 	}
 
-	// Send the response
-	return stream.SendMsg(&pb.RegisterResponse{
-		Success: res.Success,
-		Message: res.Message,
-	})
+	logtrace.Info(ctx, "cascade registration completed successfully", fields)
+	return nil
 }
