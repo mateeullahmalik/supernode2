@@ -26,7 +26,7 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type CascadeServiceClient interface {
-	Register(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[RegisterRequest, RegisterResponse], error)
+	Register(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[RegisterRequest, RegisterResponse], error)
 }
 
 type cascadeServiceClient struct {
@@ -37,7 +37,7 @@ func NewCascadeServiceClient(cc grpc.ClientConnInterface) CascadeServiceClient {
 	return &cascadeServiceClient{cc}
 }
 
-func (c *cascadeServiceClient) Register(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[RegisterRequest, RegisterResponse], error) {
+func (c *cascadeServiceClient) Register(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[RegisterRequest, RegisterResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &CascadeService_ServiceDesc.Streams[0], CascadeService_Register_FullMethodName, cOpts...)
 	if err != nil {
@@ -48,13 +48,13 @@ func (c *cascadeServiceClient) Register(ctx context.Context, opts ...grpc.CallOp
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type CascadeService_RegisterClient = grpc.ClientStreamingClient[RegisterRequest, RegisterResponse]
+type CascadeService_RegisterClient = grpc.BidiStreamingClient[RegisterRequest, RegisterResponse]
 
 // CascadeServiceServer is the server API for CascadeService service.
 // All implementations must embed UnimplementedCascadeServiceServer
 // for forward compatibility.
 type CascadeServiceServer interface {
-	Register(grpc.ClientStreamingServer[RegisterRequest, RegisterResponse]) error
+	Register(grpc.BidiStreamingServer[RegisterRequest, RegisterResponse]) error
 	mustEmbedUnimplementedCascadeServiceServer()
 }
 
@@ -65,7 +65,7 @@ type CascadeServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedCascadeServiceServer struct{}
 
-func (UnimplementedCascadeServiceServer) Register(grpc.ClientStreamingServer[RegisterRequest, RegisterResponse]) error {
+func (UnimplementedCascadeServiceServer) Register(grpc.BidiStreamingServer[RegisterRequest, RegisterResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method Register not implemented")
 }
 func (UnimplementedCascadeServiceServer) mustEmbedUnimplementedCascadeServiceServer() {}
@@ -94,7 +94,7 @@ func _CascadeService_Register_Handler(srv interface{}, stream grpc.ServerStream)
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type CascadeService_RegisterServer = grpc.ClientStreamingServer[RegisterRequest, RegisterResponse]
+type CascadeService_RegisterServer = grpc.BidiStreamingServer[RegisterRequest, RegisterResponse]
 
 // CascadeService_ServiceDesc is the grpc.ServiceDesc for CascadeService service.
 // It's only intended for direct use with grpc.RegisterService,
@@ -107,6 +107,7 @@ var CascadeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "Register",
 			Handler:       _CascadeService_Register_Handler,
+			ServerStreams: true,
 			ClientStreams: true,
 		},
 	},

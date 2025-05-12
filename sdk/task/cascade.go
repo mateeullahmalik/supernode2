@@ -183,6 +183,9 @@ func (t *CascadeTask) attemptRegistration(ctx context.Context, index int, sn lum
 	uploadCtx, cancel := context.WithTimeout(ctx, registrationTimeout)
 	defer cancel()
 
+	req.EventLogger = func(ctx context.Context, evt event.EventType, msg string, data map[string]interface{}) {
+		t.logEvent(ctx, evt, msg, data)
+	}
 	resp, err := client.RegisterCascade(uploadCtx, req)
 	if err != nil {
 		return fmt.Errorf("upload to %s: %w", sn.CosmosAddress, err)
@@ -191,7 +194,7 @@ func (t *CascadeTask) attemptRegistration(ctx context.Context, index int, sn lum
 		return fmt.Errorf("upload rejected by %s: %s", sn.CosmosAddress, resp.Message)
 	}
 
-	txhash := CleanTxHash(resp.Message)
+	txhash := CleanTxHash(resp.TxHash)
 	t.logEvent(ctx, event.TxhasReceived, "txhash received", map[string]interface{}{
 		"txhash":    txhash,
 		"supernode": sn.CosmosAddress,

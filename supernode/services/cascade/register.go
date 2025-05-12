@@ -2,7 +2,6 @@ package cascade
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/LumeraProtocol/supernode/pkg/logtrace"
 )
@@ -16,8 +15,9 @@ type RegisterRequest struct {
 
 // RegisterResponse contains the result of upload
 type RegisterResponse struct {
-	Success bool
-	Message string
+	EventType SupernodeEventType
+	Message   string
+	TxHash    string
 }
 
 // Register processes the upload request for cascade input data.
@@ -35,79 +35,106 @@ type RegisterResponse struct {
 // 7- Generate RQ-ID files from the layout that we generated locally and then match those with the ones in the action
 // 8- Verify the IDs in the layout and the metadata (the IDs should match the ones in the action)
 // 9- Store the artefacts in P2P Storage (the redundant metadata files and the symbols from the symbols dir)
-func (task *CascadeRegistrationTask) Register(ctx context.Context, req *RegisterRequest) (*RegisterResponse, error) {
+func (task *CascadeRegistrationTask) Register(
+	ctx context.Context,
+	req *RegisterRequest,
+	send func(resp *RegisterResponse) error,
+) error {
+
 	fields := logtrace.Fields{logtrace.FieldMethod: "Register", logtrace.FieldRequest: req}
+	logtrace.Info(ctx, "cascade-action-registration request received", fields)
 
 	/* 1. Fetch & validate action -------------------------------------------------- */
 	action, err := task.fetchAction(ctx, req.ActionID, fields)
 	if err != nil {
-		return nil, err
+		return err
 	}
+	fields[logtrace.FieldBlockHeight] = action.BlockHeight
+	fields[logtrace.FieldCreator] = action.Creator
+	fields[logtrace.FieldStatus] = action.State
+	fields[logtrace.FieldPrice] = action.Price
+	logtrace.Info(ctx, "action has been retrieved", fields)
+	task.streamEvent(SupernodeEventTypeActionRetrieved, "action has been retrieved", "", send)
 
 	/* 2. Verify action fee -------------------------------------------------------- */
 	if err := task.verifyActionFee(ctx, action, req.Data, fields); err != nil {
-		return nil, err
+		return err
 	}
+	logtrace.Info(ctx, "action fee has been validated", fields)
+	task.streamEvent(SupernodeEventTypeActionFeeVerified, "action-fee has been validated", "", send)
 
 	/* 3. Ensure this super-node is eligible -------------------------------------- */
+	fields[logtrace.FieldSupernodeState] = task.config.SupernodeAccountAddress
 	if err := task.ensureIsTopSupernode(ctx, uint64(action.BlockHeight), fields); err != nil {
-		return nil, err
+		return err
 	}
+	logtrace.Info(ctx, "current-supernode exists in the top-sn list", fields)
+	task.streamEvent(SupernodeEventTypeTopSupernodeCheckPassed, "current supernode exists in the top-sn list", "", send)
 
 	/* 4. Decode cascade metadata -------------------------------------------------- */
 	cascadeMeta, err := task.decodeCascadeMetadata(ctx, action.Metadata, fields)
 	if err != nil {
-		return nil, err
+		return err
 	}
+	logtrace.Info(ctx, "cascade metadata decoded", fields)
+	task.streamEvent(SupernodeEventTypeMetadataDecoded, "cascade metadata has been decoded", "", send)
 
 	/* 5. Verify data hash --------------------------------------------------------- */
 	if err := task.verifyDataHash(ctx, req.Data, cascadeMeta.DataHash, fields); err != nil {
-		return nil, err
+		return err
 	}
+	logtrace.Info(ctx, "data-hash has been verified", fields)
+	task.streamEvent(SupernodeEventTypeDataHashVerified, "data-hash has been verified", "", send)
 
 	/* 6. Encode the raw data ------------------------------------------------------ */
 	encResp, err := task.encodeInput(ctx, req.Data, fields)
 	if err != nil {
-		return nil, err
+		return err
 	}
+	logtrace.Info(ctx, "input-data has been encoded", fields)
+	task.streamEvent(SupernodeEventTypeInputEncoded, "input data has been encoded", "", send)
 
 	/* 7. Signature verification + layout decode ---------------------------------- */
 	layout, signature, err := task.verifySignatureAndDecodeLayout(
 		ctx, cascadeMeta.Signatures, action.Creator, encResp.Metadata, fields,
 	)
 	if err != nil {
-		return nil, err
+		return err
 	}
+	logtrace.Info(ctx, "signature has been verified", fields)
+	task.streamEvent(SupernodeEventTypeSignatureVerified, "signature has been verified", "", send)
 
 	/* 8. Generate RQ-ID files ----------------------------------------------------- */
 	rqidResp, err := task.generateRQIDFiles(ctx, cascadeMeta, signature, action.Creator, encResp.Metadata, fields)
 	if err != nil {
-		return nil, err
+		return err
 	}
+	logtrace.Info(ctx, "rq-id files have been generated", fields)
+	task.streamEvent(SupernodeEventTypeRQIDsGenerated, "rq-id files have been generated", "", send)
 
 	/* 9. Consistency checks ------------------------------------------------------- */
 	if err := verifyIDs(ctx, layout, encResp.Metadata); err != nil {
-		return nil, task.wrapErr(ctx, "failed to verify IDs", err, fields)
+		return err
 	}
+	logtrace.Info(ctx, "rq-ids have been verified", fields)
+	task.streamEvent(SupernodeEventTypeRqIDsVerified, "rq-ids have been verified", "", send)
 
 	/* 10. Persist artefacts -------------------------------------------------------- */
 	if err := task.storeArtefacts(ctx, rqidResp.RedundantMetadataFiles, encResp.SymbolsDir, fields); err != nil {
-		return nil, err
+		return err
 	}
 	logtrace.Info(ctx, "artefacts have been stored", fields)
+	task.streamEvent(SupernodeEventTypeArtefactsStored, "artefacts have been stored", "", send)
 
 	resp, err := task.lumeraClient.ActionMsg().FinalizeCascadeAction(ctx, action.ActionID, rqidResp.RQIDs)
 	if err != nil {
-		logtrace.Info(ctx, "Finalize Action Error", logtrace.Fields{
-			"error": err.Error(),
-		})
-		return nil, err
+		fields[logtrace.FieldError] = err.Error()
+		logtrace.Info(ctx, "Finalize Action Error", fields)
+		return task.wrapErr(ctx, "failed to finalize action", err, fields)
 	}
+	fields[logtrace.FieldTxHash] = resp.TxHash
+	logtrace.Info(ctx, "action has been finalized", fields)
+	task.streamEvent(SupernodeEventTypeActionFinalized, "action has been finalized", resp.TxHash, send)
 
-	logtrace.Info(ctx, "Finalize Action Response", logtrace.Fields{
-		"resp": resp.Code,
-		"log":  resp.TxHash})
-
-	// Return success when the cascade action is finalized without errors
-	return &RegisterResponse{Success: true, Message: fmt.Sprintf("successfully uploaded and finalized input data with txID: %s", resp.TxHash)}, nil
+	return nil
 }

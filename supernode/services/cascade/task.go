@@ -2,7 +2,6 @@ package cascade
 
 import (
 	"context"
-
 	"github.com/LumeraProtocol/supernode/pkg/storage/files"
 	"github.com/LumeraProtocol/supernode/supernode/services/common"
 )
@@ -42,4 +41,14 @@ func NewCascadeRegistrationTask(service *CascadeService) *CascadeRegistrationTas
 	}
 
 	return task
+}
+
+func (task *CascadeRegistrationTask) streamEvent(eventType SupernodeEventType, msg, txHash string, send func(resp *RegisterResponse) error) {
+	_ = send(&RegisterResponse{
+		EventType: eventType,
+		Message:   msg,
+		TxHash:    txHash,
+	})
+
+	return
 }
