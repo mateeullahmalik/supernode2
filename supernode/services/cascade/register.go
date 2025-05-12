@@ -113,20 +113,20 @@ func (task *CascadeRegistrationTask) Register(
 	task.streamEvent(SupernodeEventTypeRQIDsGenerated, "rq-id files have been generated", "", send)
 
 	/* 9. Consistency checks ------------------------------------------------------- */
-	if err := verifyIDs(ctx, layout, encResp.Metadata); err != nil {
-		return err
+	if err := verifyIDs(layout, encResp.Metadata); err != nil {
+		return task.wrapErr(ctx, "failed to verify IDs", err, fields)
 	}
 	logtrace.Info(ctx, "rq-ids have been verified", fields)
 	task.streamEvent(SupernodeEventTypeRqIDsVerified, "rq-ids have been verified", "", send)
 
 	/* 10. Persist artefacts -------------------------------------------------------- */
-	if err := task.storeArtefacts(ctx, rqidResp.RedundantMetadataFiles, encResp.SymbolsDir, fields); err != nil {
+	if err := task.storeArtefacts(ctx, action.ActionID, rqidResp.RedundantMetadataFiles, encResp.SymbolsDir, fields); err != nil {
 		return err
 	}
 	logtrace.Info(ctx, "artefacts have been stored", fields)
 	task.streamEvent(SupernodeEventTypeArtefactsStored, "artefacts have been stored", "", send)
 
-	resp, err := task.lumeraClient.ActionMsg().FinalizeCascadeAction(ctx, action.ActionID, rqidResp.RQIDs)
+	resp, err := task.lumeraClient.FinalizeAction(ctx, action.ActionID, rqidResp.RQIDs)
 	if err != nil {
 		fields[logtrace.FieldError] = err.Error()
 		logtrace.Info(ctx, "Finalize Action Error", fields)

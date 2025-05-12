@@ -11,8 +11,3 @@ type Config struct {
 	RaptorQServiceAddress string `mapstructure:"-" json:"-"`
 	RqFilesDir            string `mapstructure:"rq_files_dir" json:"rq_files_dir,omitempty"`
 }
-
-// NewConfig returns a new Config instance with default values
-func NewConfig() *Config {
-	return &Config{}
-}

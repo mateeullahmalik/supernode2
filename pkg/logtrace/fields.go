@@ -16,4 +16,6 @@ const (
 	FieldRequest        = "request"
 	FieldStackTrace     = "stack_trace"
 	FieldTxHash         = "tx_hash"
+	FieldTaskID         = "task_id"
+	FieldActionID       = "action_id"
 )

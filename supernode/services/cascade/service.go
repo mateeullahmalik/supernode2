@@ -6,8 +6,8 @@ import (
 	"github.com/LumeraProtocol/supernode/p2p"
 	"github.com/LumeraProtocol/supernode/pkg/codec"
 	"github.com/LumeraProtocol/supernode/pkg/lumera"
-
 	"github.com/LumeraProtocol/supernode/pkg/storage/rqstore"
+	"github.com/LumeraProtocol/supernode/supernode/services/cascade/adaptors"
 	"github.com/LumeraProtocol/supernode/supernode/services/common"
 )
 
@@ -15,15 +15,15 @@ type CascadeService struct {
 	*common.SuperNodeService
 	config *Config
 
-	lumeraClient lumera.Client
-	rqstore      rqstore.Store
-	codec        codec.Codec
+	lumeraClient adaptors.LumeraClient
+	p2p          adaptors.P2PService
+	rq           adaptors.CodecService
 }
 
 // NewCascadeRegistrationTask creates a new task for cascade registration
-func (s *CascadeService) NewCascadeRegistrationTask() *CascadeRegistrationTask {
-	task := NewCascadeRegistrationTask(s)
-	s.Worker.AddTask(task)
+func (service *CascadeService) NewCascadeRegistrationTask() RegistrationTaskService {
+	task := NewCascadeRegistrationTask(service)
+	service.Worker.AddTask(task)
 	return task
 }
 
@@ -37,13 +37,8 @@ func NewCascadeService(config *Config, lumera lumera.Client, p2pClient p2p.Clien
 	return &CascadeService{
 		config:           config,
 		SuperNodeService: common.NewSuperNodeService(p2pClient),
-		lumeraClient:     lumera,
-		codec:            codec,
-		rqstore:          rqstore,
+		lumeraClient:     adaptors.NewLumeraClient(lumera),
+		p2p:              adaptors.NewP2PService(p2pClient, rqstore),
+		rq:               adaptors.NewCodecService(codec),
 	}
-}
-
-// GetSNAddress returns the supernode account address
-func (s *CascadeService) GetSNAddress() string {
-	return s.config.SupernodeAccountAddress
 }
