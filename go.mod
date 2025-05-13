@@ -2,6 +2,7 @@ module github.com/LumeraProtocol/supernode
 
 go 1.24.1
 
+replace "github.com/LumeraProtocol/supernode/supernode" => ./supernode
 require (
 	cosmossdk.io/math v1.5.3
 	github.com/LumeraProtocol/lumera v0.4.5

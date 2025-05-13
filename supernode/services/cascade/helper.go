@@ -4,28 +4,26 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-
 	"strings"
 
 	"cosmossdk.io/math"
+	actiontypes "github.com/LumeraProtocol/lumera/x/action/types"
 	"github.com/LumeraProtocol/supernode/pkg/codec"
 	"github.com/LumeraProtocol/supernode/pkg/errors"
-	"github.com/LumeraProtocol/supernode/pkg/log"
 	"github.com/LumeraProtocol/supernode/pkg/logtrace"
 	"github.com/LumeraProtocol/supernode/pkg/lumera/modules/supernode"
 	"github.com/LumeraProtocol/supernode/pkg/utils"
-	"github.com/LumeraProtocol/supernode/supernode/services/common"
+	"github.com/LumeraProtocol/supernode/supernode/services/cascade/adaptors"
+
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/golang/protobuf/proto"
 	json "github.com/json-iterator/go"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-
-	actiontypes "github.com/LumeraProtocol/lumera/x/action/types"
 )
 
 func (task *CascadeRegistrationTask) fetchAction(ctx context.Context, actionID string, f logtrace.Fields) (*actiontypes.Action, error) {
-	res, err := task.lumeraClient.Action().GetAction(ctx, actionID)
+	res, err := task.lumeraClient.GetAction(ctx, actionID)
 	if err != nil {
 		return nil, task.wrapErr(ctx, "failed to get action", err, f)
 	}
@@ -39,7 +37,7 @@ func (task *CascadeRegistrationTask) fetchAction(ctx context.Context, actionID s
 }
 
 func (task *CascadeRegistrationTask) ensureIsTopSupernode(ctx context.Context, blockHeight uint64, f logtrace.Fields) error {
-	top, err := task.lumeraClient.SuperNode().GetTopSuperNodesForBlock(ctx, blockHeight)
+	top, err := task.lumeraClient.GetTopSupernodes(ctx, blockHeight)
 	if err != nil {
 		return task.wrapErr(ctx, "failed to get top SNs", err, f)
 	}
@@ -81,8 +79,8 @@ func (task *CascadeRegistrationTask) verifyDataHash(ctx context.Context, data []
 	return nil
 }
 
-func (task *CascadeRegistrationTask) encodeInput(ctx context.Context, data []byte, f logtrace.Fields) (*codec.EncodeResponse, error) {
-	resp, err := task.codec.Encode(ctx, codec.EncodeRequest{Data: data, TaskID: task.ID()})
+func (task *CascadeRegistrationTask) encodeInput(ctx context.Context, data []byte, f logtrace.Fields) (*adaptors.EncodeResult, error) {
+	resp, err := task.rq.EncodeInput(ctx, task.ID(), data)
 	if err != nil {
 		return nil, task.wrapErr(ctx, "failed to encode data", err, f)
 	}
@@ -111,7 +109,7 @@ func (task *CascadeRegistrationTask) verifySignatureAndDecodeLayout(ctx context.
 	})
 
 	// Pass the decoded signature bytes for verification
-	if err := task.lumeraClient.Auth().Verify(ctx, creator, []byte(file), sigBytes); err != nil {
+	if err := task.lumeraClient.Verify(ctx, creator, []byte(file), sigBytes); err != nil {
 		return codec.Layout{}, "", task.wrapErr(ctx, "failed to verify node creator signature", err, f)
 	}
 
@@ -142,20 +140,13 @@ func (task *CascadeRegistrationTask) generateRQIDFiles(ctx context.Context, meta
 	return res, nil
 }
 
-func (task *CascadeRegistrationTask) storeArtefacts(ctx context.Context, idFiles [][]byte, symbolsDir string, f logtrace.Fields) error {
-	logtrace.Info(ctx, "About to store ID files", logtrace.Fields{"taskID": task.ID(), "fileCount": len(idFiles)})
-
-	if err := task.storeIDFiles(ctx, idFiles); err != nil {
-		return task.wrapErr(ctx, "failed to store ID files", err, f)
-	}
-	logtrace.Info(ctx, "id files have been stored", f)
-
-	if err := task.storeRaptorQSymbols(ctx, symbolsDir); err != nil {
-		return task.wrapErr(ctx, "error storing raptor-q symbols", err, f)
-	}
-	logtrace.Info(ctx, "raptor-q symbols have been stored", f)
-
-	return nil
+func (task *CascadeRegistrationTask) storeArtefacts(ctx context.Context, actionID string, idFiles [][]byte, symbolsDir string, f logtrace.Fields) error {
+	return task.p2p.StoreArtefacts(ctx, adaptors.StoreArtefactsRequest{
+		IDFiles:    idFiles,
+		SymbolsDir: symbolsDir,
+		TaskID:     task.ID(),
+		ActionID:   actionID,
+	}, f)
 }
 
 func (task *CascadeRegistrationTask) wrapErr(ctx context.Context, msg string, err error, f logtrace.Fields) error {
@@ -194,7 +185,7 @@ func decodeMetadataFile(data string) (layout codec.Layout, err error) {
 	return layout, nil
 }
 
-func verifyIDs(ctx context.Context, ticketMetadata, metadata codec.Layout) error {
+func verifyIDs(ticketMetadata, metadata codec.Layout) error {
 	// Verify that the symbol identifiers match between versions
 	if err := utils.EqualStrList(ticketMetadata.Blocks[0].Symbols, metadata.Blocks[0].Symbols); err != nil {
 		return errors.Errorf("symbol identifiers don't match: %w", err)
@@ -208,57 +199,11 @@ func verifyIDs(ctx context.Context, ticketMetadata, metadata codec.Layout) error
 	return nil
 }
 
-// storeIDFiles stores ID files to P2P
-func (task *CascadeRegistrationTask) storeIDFiles(ctx context.Context, metadataFiles [][]byte) error {
-	ctx = context.WithValue(ctx, log.TaskIDKey, task.ID())
-	task.storage.TaskID = task.ID()
-
-	// Log basic info before storing
-	logtrace.Info(ctx, "Storing ID files", logtrace.Fields{
-		"taskID": task.ID(),
-	})
-
-	// Check if files exist
-	if len(metadataFiles) == 0 {
-		logtrace.Error(ctx, "No ID files to store", nil)
-		return errors.New("no ID files to store")
-	}
-
-	// Store files with better error handling
-	if err := task.storage.StoreBatch(ctx, metadataFiles, common.P2PDataCascadeMetadata); err != nil {
-		logtrace.Error(ctx, "Store operation failed", logtrace.Fields{
-			"error":     err.Error(),
-			"fileCount": len(metadataFiles),
-		})
-		return errors.Errorf("store ID files into kademlia: %w", err)
-	}
-
-	logtrace.Info(ctx, "ID files stored successfully", nil)
-	return nil
-}
-
-// storeRaptorQSymbols stores RaptorQ symbols to P2P
-func (task *CascadeRegistrationTask) storeRaptorQSymbols(ctx context.Context, symbolsDir string) error {
-	// Add improved logging
-	logtrace.Info(ctx, "Storing RaptorQ symbols", logtrace.Fields{
-		"taskID": task.ID(),
-	})
-
-	err := task.storage.StoreRaptorQSymbolsIntoP2P(ctx, task.ID(), symbolsDir)
-	if err != nil {
-		logtrace.Error(ctx, "Failed to store RaptorQ symbols", logtrace.Fields{
-			"taskID": task.ID(),
-			"error":  err.Error(),
-		})
-	}
-	return err
-}
-
 // verifyActionFee checks if the action fee is sufficient for the given data size
 // It fetches action parameters, calculates the required fee, and compares it with the action price
 func (task *CascadeRegistrationTask) verifyActionFee(ctx context.Context, action *actiontypes.Action, data []byte, fields logtrace.Fields) error {
 	// Fetch action parameters
-	params, err := task.lumeraClient.Action().GetParams(ctx)
+	params, err := task.lumeraClient.GetActionParams(ctx)
 	if err != nil {
 		return task.wrapErr(ctx, "failed to get action parameters", err, fields)
 	}

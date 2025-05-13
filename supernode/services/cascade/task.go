@@ -37,7 +37,6 @@ func NewCascadeRegistrationTask(service *CascadeService) *CascadeRegistrationTas
 	task := &CascadeRegistrationTask{
 		SuperNodeTask:  common.NewSuperNodeTask(logPrefix),
 		CascadeService: service,
-		storage:        common.NewStorageHandler(service.P2PClient, service.config.RqFilesDir, service.rqstore),
 	}
 
 	return task

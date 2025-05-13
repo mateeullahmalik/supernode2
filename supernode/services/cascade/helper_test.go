@@ -1,7 +1,6 @@
 package cascade
 
 import (
-	"context"
 	"encoding/json"
 	"testing"
 
@@ -107,7 +106,7 @@ func Test_verifyIDs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := verifyIDs(context.Background(), tt.ticket, tt.metadata)
+			err := verifyIDs(tt.ticket, tt.metadata)
 			if tt.expectErr != "" {
 				assert.ErrorContains(t, err, tt.expectErr)
 			} else {

@@ -11,21 +11,21 @@ import (
 	"google.golang.org/grpc"
 )
 
-type CascadeActionServer struct {
+type ActionServer struct {
 	pb.UnimplementedCascadeServiceServer
-	service *cascadeService.CascadeService
+	factory cascadeService.TaskFactory
 }
 
-func NewCascadeActionServer(service *cascadeService.CascadeService) *CascadeActionServer {
-	return &CascadeActionServer{
-		service: service,
-	}
+// NewCascadeActionServer creates a new CascadeActionServer with injected service
+func NewCascadeActionServer(factory cascadeService.TaskFactory) *ActionServer {
+	return &ActionServer{factory: factory}
 }
 
-func (server *CascadeActionServer) Desc() *grpc.ServiceDesc {
+func (server *ActionServer) Desc() *grpc.ServiceDesc {
 	return &pb.CascadeService_ServiceDesc
 }
-func (server *CascadeActionServer) Register(stream pb.CascadeService_RegisterServer) error {
+
+func (server *ActionServer) Register(stream pb.CascadeService_RegisterServer) error {
 	fields := logtrace.Fields{
 		logtrace.FieldMethod: "Register",
 		logtrace.FieldModule: "CascadeActionServer",
@@ -77,9 +77,12 @@ func (server *CascadeActionServer) Register(stream pb.CascadeService_RegisterSer
 		logtrace.Error(ctx, "no metadata received in stream", fields)
 		return fmt.Errorf("no metadata received")
 	}
+	fields[logtrace.FieldTaskID] = metadata.GetTaskId()
+	fields[logtrace.FieldActionID] = metadata.GetActionId()
+	logtrace.Info(ctx, "metadata received from action-sdk", fields)
 
 	// Process the complete data
-	task := server.service.NewCascadeRegistrationTask()
+	task := server.factory.NewCascadeRegistrationTask()
 	err := task.Register(ctx, &cascadeService.RegisterRequest{
 		TaskID:   metadata.TaskId,
 		ActionID: metadata.ActionId,
