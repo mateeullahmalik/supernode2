@@ -2,9 +2,10 @@ package event
 
 import (
 	"context"
-	"github.com/LumeraProtocol/supernode/sdk/log"
 	"runtime/debug"
 	"sync"
+
+	"github.com/LumeraProtocol/supernode/sdk/log"
 )
 
 // Handler is a function that processes events
@@ -77,12 +78,7 @@ func (b *Bus) safelyCallHandler(ctx context.Context, handler Handler, event Even
 			// Recover from panics
 			if r := recover(); r != nil {
 				stackTrace := debug.Stack()
-				b.logger.Error(ctx,
-					"Event handler panicked",
-					"error", r,
-					"eventType", event.Type,
-					"stackTrace", string(stackTrace),
-				)
+				b.logger.Error(ctx, "Event handler panicked", "error", r, "eventType", event.Type, "stackTrace", string(stackTrace))
 			}
 		}()
 
@@ -102,7 +98,8 @@ func copyEvent(e Event) Event {
 		TaskID:    e.TaskID,
 		TaskType:  e.TaskType,
 		Timestamp: e.Timestamp,
-		Data:      make(map[string]interface{}, len(e.Data)),
+		ActionID:  e.ActionID,
+		Data:      make(EventData, len(e.Data)),
 	}
 
 	// Copy the data map
@@ -118,16 +115,11 @@ func (b *Bus) Publish(ctx context.Context, event Event) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
-	b.logger.Debug(ctx, "Publishing event",
-		"type", event.Type,
-		"taskID", event.TaskID,
-		"taskType", event.TaskType)
+	b.logger.Debug(ctx, "Publishing event", "type", event.Type, "taskID", event.TaskID, "taskType", event.TaskType)
 
 	// Call type-specific handlers
 	if handlers, exists := b.subscribers[event.Type]; exists {
-		b.logger.Debug(ctx, "Calling type-specific handlers",
-			"eventType", event.Type,
-			"handlerCount", len(handlers))
+		b.logger.Debug(ctx, "Calling type-specific handlers", "eventType", event.Type, "handlerCount", len(handlers))
 
 		for _, handler := range handlers {
 			b.safelyCallHandler(ctx, handler, event)
@@ -136,8 +128,7 @@ func (b *Bus) Publish(ctx context.Context, event Event) {
 
 	// Call wildcard handlers
 	if len(b.wildcardHandlers) > 0 {
-		b.logger.Debug(ctx, "Calling wildcard handlers",
-			"handlerCount", len(b.wildcardHandlers))
+		b.logger.Debug(ctx, "Calling wildcard handlers", "handlerCount", len(b.wildcardHandlers))
 
 		for _, handler := range b.wildcardHandlers {
 			b.safelyCallHandler(ctx, handler, event)

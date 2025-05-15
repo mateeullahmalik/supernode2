@@ -12,12 +12,15 @@ import (
 	sntypes "github.com/LumeraProtocol/lumera/x/supernode/types"
 	lumeraclient "github.com/LumeraProtocol/supernode/pkg/lumera"
 	"github.com/cosmos/cosmos-sdk/crypto/keyring"
+	"github.com/golang/protobuf/proto"
 )
 
 //go:generate mockery --name=Client --output=testutil/mocks --outpkg=mocks --filename=lumera_mock.go
 type Client interface {
 	GetAction(ctx context.Context, actionID string) (Action, error)
 	GetSupernodes(ctx context.Context, height int64) ([]Supernode, error)
+	DecodeCascadeMetadata(ctx context.Context, action Action) (actiontypes.CascadeMetadata, error)
+	VerifySignature(ctx context.Context, accountAddr string, data []byte, signature []byte) error
 }
 
 // ConfigParams holds configuration parameters from global config
@@ -128,13 +131,42 @@ func (a *Adapter) GetSupernodes(ctx context.Context, height int64) ([]Supernode,
 	return supernodes, nil
 }
 
-func toSdkAction(resp *actiontypes.QueryGetActionResponse) Action {
+func (a *Adapter) VerifySignature(ctx context.Context, accountAddr string, data, signature []byte) error {
 
+	err := a.client.Auth().Verify(ctx, accountAddr, data, signature)
+	if err != nil {
+		a.logger.Error(ctx, "Signature verification failed", "accountAddr", accountAddr, "error", err)
+		return fmt.Errorf("signature verification failed: %w", err)
+	}
+	a.logger.Debug(ctx, "Signature verified successfully", "accountAddr", accountAddr)
+	return nil
+}
+
+// DecodeCascadeMetadata decodes the raw metadata bytes into CascadeMetadata
+func (a *Adapter) DecodeCascadeMetadata(ctx context.Context, action Action) (actiontypes.CascadeMetadata, error) {
+	if action.ActionType != "ACTION_TYPE_CASCADE" {
+		return actiontypes.CascadeMetadata{}, fmt.Errorf("action is not of type CASCADE, got %s", action.ActionType)
+	}
+
+	var meta actiontypes.CascadeMetadata
+	if err := proto.Unmarshal(action.Metadata, &meta); err != nil {
+		a.logger.Error(ctx, "Failed to unmarshal cascade metadata", "actionID", action.ID, "error", err)
+		return meta, fmt.Errorf("failed to unmarshal cascade metadata: %w", err)
+	}
+
+	a.logger.Debug(ctx, "Successfully decoded cascade metadata", "actionID", action.ID)
+	return meta, nil
+}
+
+func toSdkAction(resp *actiontypes.QueryGetActionResponse) Action {
 	return Action{
 		ID:             resp.Action.ActionID,
 		State:          ACTION_STATE(resp.Action.State.String()),
 		Height:         resp.Action.BlockHeight,
 		ExpirationTime: resp.Action.ExpirationTime,
+		ActionType:     resp.Action.ActionType.String(),
+		Metadata:       resp.Action.Metadata,
+		Creator:        resp.Action.Creator,
 	}
 }
 

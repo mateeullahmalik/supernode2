@@ -297,6 +297,14 @@ func TestCascadeE2E(t *testing.T) {
 	hash, err := Blake3Hash(data)
 	b64EncodedHash := base64.StdEncoding.EncodeToString(hash)
 	require.NoError(t, err, "Failed to compute Blake3 hash")
+
+	// Also Create a signature for the hash
+	signedHash, err := keyring.SignBytes(keplrKeyring, userKeyName, hash)
+	require.NoError(t, err, "Failed to sign hash")
+
+	// Encode the signed hash as base64
+	signedHashBase64 := base64.StdEncoding.EncodeToString(signedHash)
+
 	// ---------------------------------------
 	t.Log("Step 7: Creating metadata and submitting action request")
 
@@ -437,11 +445,14 @@ func TestCascadeE2E(t *testing.T) {
 	require.NoError(t, err, "Failed to subscribe to events")
 
 	// Start cascade operation
+
+	//
 	t.Logf("Starting cascade operation with action ID: %s", actionID)
 	taskID, err := actionClient.StartCascade(
 		ctx,
 		testFileFullpath, // path
 		actionID,         // Action ID from the transaction
+		signedHashBase64, // Signed hash of the file
 	)
 	require.NoError(t, err, "Failed to start cascade operation")
 	t.Logf("Cascade operation started with task ID: %s", taskID)

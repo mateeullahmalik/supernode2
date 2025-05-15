@@ -19,7 +19,7 @@ const MAX_EVENT_WORKERS = 100
 //
 //go:generate mockery --name=Manager --output=testutil/mocks --outpkg=mocks --filename=manager_mock.go
 type Manager interface {
-	CreateCascadeTask(ctx context.Context, filePath string, actionID string) (string, error)
+	CreateCascadeTask(ctx context.Context, filePath string, actionID string, signature string) (string, error)
 	GetTask(ctx context.Context, taskID string) (*TaskEntry, bool)
 	DeleteTask(ctx context.Context, taskID string) error
 	SubscribeToEvents(ctx context.Context, eventType event.EventType, handler event.Handler)
@@ -78,7 +78,18 @@ func NewManager(ctx context.Context, config config.Config, logger log.Logger, kr
 }
 
 // CreateCascadeTask creates and starts a Cascade task using the new pattern
-func (m *ManagerImpl) CreateCascadeTask(ctx context.Context, filePath string, actionID string) (string, error) {
+func (m *ManagerImpl) CreateCascadeTask(ctx context.Context, filePath string, actionID, signature string) (string, error) {
+	// First validate the action before creating the task
+	action, err := m.validateAction(ctx, actionID)
+	if err != nil {
+		return "", err
+	}
+
+	// verify signature
+	if err := m.validateSignature(ctx, action, signature); err != nil {
+		return "", err
+	}
+
 	taskID := uuid.New().String()[:8]
 
 	m.logger.Debug(ctx, "Generated task ID", "taskID", taskID)
@@ -87,17 +98,19 @@ func (m *ManagerImpl) CreateCascadeTask(ctx context.Context, filePath string, ac
 		TaskID:   taskID,
 		ActionID: actionID,
 		TaskType: TaskTypeCascade,
+		Action:   action,
 		client:   m.lumeraClient,
 		keyring:  m.keyring,
 		config:   m.config,
 		onEvent:  m.handleEvent,
 		logger:   m.logger,
 	}
+
 	// Create cascade-specific task
 	task := NewCascadeTask(baseTask, filePath, actionID)
 
 	// Store task in cache
-	m.taskCache.Set(ctx, taskID, task, TaskTypeCascade)
+	m.taskCache.Set(ctx, taskID, task, TaskTypeCascade, actionID)
 
 	// Ensure task is stored before returning
 	m.taskCache.Wait()
@@ -178,13 +191,19 @@ func (m *ManagerImpl) handleEvent(ctx context.Context, e event.Event) {
 		m.taskCache.UpdateStatus(ctx, e.TaskID, StatusCompleted, nil)
 	case event.TaskFailed:
 		var err error
-		if errMsg, ok := e.Data["error"].(string); ok {
+		if errMsg, ok := e.Data[event.KeyError].(string); ok {
 			err = fmt.Errorf("%s", errMsg)
 			m.logger.Error(ctx, "Task failed", "taskID", e.TaskID, "taskType", e.TaskType, "error", errMsg)
 		} else {
 			m.logger.Error(ctx, "Task failed with unknown error", "taskID", e.TaskID, "taskType", e.TaskType)
 		}
 		m.taskCache.UpdateStatus(ctx, e.TaskID, StatusFailed, err)
+	case event.TxhasReceived:
+		// Capture and store transaction hash from event
+		if txHash, ok := e.Data[event.KeyTxHash].(string); ok && txHash != "" {
+			m.logger.Info(ctx, "Transaction hash received", "taskID", e.TaskID, "txHash", txHash)
+			m.taskCache.UpdateTxHash(ctx, e.TaskID, txHash)
+		}
 	}
 
 	// Forward to the global event bus if configured
