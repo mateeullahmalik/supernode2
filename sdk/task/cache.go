@@ -15,8 +15,10 @@ import (
 type TaskEntry struct {
 	Task          Task
 	TaskID        string
+	ActionID      string
 	TaskType      TaskType
 	Status        TaskStatus
+	TxHash        string
 	Error         error
 	Events        []event.Event
 	CreatedAt     time.Time
@@ -63,7 +65,7 @@ func (tc *TaskCache) getOrCreateMutex(taskID string) *sync.Mutex {
 }
 
 // Set stores a task in the cache with initial metadata
-func (tc *TaskCache) Set(ctx context.Context, taskID string, task Task, taskType TaskType) bool {
+func (tc *TaskCache) Set(ctx context.Context, taskID string, task Task, taskType TaskType, actionID string) bool {
 	mu := tc.getOrCreateMutex(taskID)
 	mu.Lock()
 	defer mu.Unlock()
@@ -74,6 +76,7 @@ func (tc *TaskCache) Set(ctx context.Context, taskID string, task Task, taskType
 	entry := &TaskEntry{
 		Task:          task,
 		TaskID:        taskID,
+		ActionID:      actionID,
 		TaskType:      taskType,
 		Status:        StatusPending,
 		Events:        make([]event.Event, 0),
@@ -123,6 +126,34 @@ func (tc *TaskCache) UpdateStatus(ctx context.Context, taskID string, status Tas
 	success := tc.cache.Set(taskID, &updatedEntry, 1)
 	if !success {
 		tc.logger.Warn(ctx, "Failed to update status in cache (locked)", "taskID", taskID)
+	}
+	return success
+}
+
+// UpdateTxHash updates the transaction hash of a task in the cache atomically
+func (tc *TaskCache) UpdateTxHash(ctx context.Context, taskID string, txHash string) bool {
+	mu := tc.getOrCreateMutex(taskID)
+	mu.Lock()
+	defer mu.Unlock()
+
+	tc.logger.Info(ctx, "Updating task txHash (locked)", "taskID", taskID, "txHash", txHash)
+
+	// Perform Get-Modify-Set within the lock
+	existingEntry, found := tc.cache.Get(taskID)
+	if !found {
+		tc.logger.Warn(ctx, "Cannot update txHash - task not found (locked)", "taskID", taskID)
+		return false // Task doesn't exist
+	}
+
+	// Create a new entry with updated txHash
+	updatedEntry := *existingEntry // Copy the struct
+	updatedEntry.TxHash = txHash
+	updatedEntry.LastUpdatedAt = time.Now()
+
+	// Set the modified entry back into the cache
+	success := tc.cache.Set(taskID, &updatedEntry, 1)
+	if !success {
+		tc.logger.Warn(ctx, "Failed to update txHash in cache (locked)", "taskID", taskID)
 	}
 	return success
 }

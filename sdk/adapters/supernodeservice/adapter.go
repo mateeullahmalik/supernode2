@@ -138,7 +138,13 @@ func (a *cascadeAdapter) CascadeSupernodeRegister(ctx context.Context, in *Casca
 		a.logger.Info(ctx, "Supernode progress update received", "event_type", resp.EventType, "message", resp.Message, "tx_hash", resp.TxHash, "task_id", in.TaskId, "action_id", in.ActionID)
 
 		if in.EventLogger != nil {
-			in.EventLogger(ctx, toSdkEvent(resp.EventType), resp.Message, nil)
+			in.EventLogger(ctx, toSdkEvent(resp.EventType), resp.Message, event.EventData{
+				event.KeyEventType: resp.EventType,
+				event.KeyMessage:   resp.Message,
+				event.KeyTxHash:    resp.TxHash,
+				event.KeyTaskID:    in.TaskId,
+				event.KeyActionID:  in.ActionID,
+			})
 		}
 
 		// Optionally capture the final response

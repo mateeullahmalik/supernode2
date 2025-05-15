@@ -54,14 +54,17 @@ var taskProgressSteps = []EventType{
 	TaskCompleted,
 }
 
+// EventData is a map of event data attributes using standardized keys
+type EventData map[EventDataKey]any
+
 // Event represents an event emitted by the system
 type Event struct {
-	Type      EventType              // Type of event
-	TaskID    string                 // ID of the task that emitted the event
-	TaskType  string                 // Type of task (CASCADE, SENSE)
-	Timestamp time.Time              // When the event occurred
-	ActionID  string                 // ID of the action associated with the task
-	Data      map[string]interface{} // Additional contextual data
+	Type      EventType // Type of event
+	TaskID    string    // ID of the task that emitted the event
+	TaskType  string    // Type of task (CASCADE, SENSE)
+	Timestamp time.Time // When the event occurred
+	ActionID  string    // ID of the action associated with the task
+	Data      EventData // Additional contextual data
 }
 
 // SupernodeData contains information about a supernode involved in an event
@@ -70,9 +73,9 @@ type SupernodeData struct {
 	Error     string           // Error message if applicable
 }
 
-func NewEvent(ctx context.Context, eventType EventType, taskID, taskType string, actionID string, data map[string]interface{}) Event {
+func NewEvent(ctx context.Context, eventType EventType, taskID, taskType string, actionID string, data EventData) Event {
 	if data == nil {
-		data = make(map[string]interface{})
+		data = make(EventData)
 	}
 
 	return Event{

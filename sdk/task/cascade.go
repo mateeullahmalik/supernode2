@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -39,49 +38,38 @@ func NewCascadeTask(base BaseTask, filePath string, actionId string) *CascadeTas
 
 // Run executes the full cascade‐task lifecycle.
 func (t *CascadeTask) Run(ctx context.Context) error {
-	t.logEvent(ctx, event.TaskStarted, "Running cascade task", nil)
+	t.LogEvent(ctx, event.TaskStarted, "Running cascade task", nil)
 
-	action, err := t.fetchAndValidateAction(ctx, t.ActionID)
+	// Use the already validated Action directly to get the height
+	supernodes, err := t.fetchSupernodes(ctx, t.Action.Height)
 	if err != nil {
-		return t.fail(ctx, event.TaskProgressActionVerificationFailed, err)
+		t.logger.Error(ctx, "Task failed", "taskID", t.TaskID, "actionID", t.ActionID, "error", err)
+		t.EmitEvent(ctx, event.TaskProgressSupernodesUnavailable, event.EventData{
+			event.KeyError: err.Error(),
+		})
+		t.EmitEvent(ctx, event.TaskFailed, event.EventData{
+			event.KeyError: err.Error(),
+		})
+		return err
 	}
-	t.logEvent(ctx, event.TaskProgressActionVerified, "Action verified.", nil)
-
-	supernodes, err := t.fetchSupernodes(ctx, action.Height)
-	if err != nil {
-		return t.fail(ctx, event.TaskProgressSupernodesUnavailable, err)
-	}
-	t.logEvent(ctx, event.TaskProgressSupernodesFound, "Supernodes found.", map[string]interface{}{
-		"count": len(supernodes),
+	t.LogEvent(ctx, event.TaskProgressSupernodesFound, "Supernodes found.", event.EventData{
+		event.KeyCount: len(supernodes),
 	})
 
 	if err := t.registerWithSupernodes(ctx, supernodes); err != nil {
-		return t.fail(ctx, event.TaskProgressRegistrationFailure, err)
+		t.logger.Error(ctx, "Task failed", "taskID", t.TaskID, "actionID", t.ActionID, "error", err)
+		t.EmitEvent(ctx, event.TaskProgressRegistrationFailure, event.EventData{
+			event.KeyError: err.Error(),
+		})
+		t.EmitEvent(ctx, event.TaskFailed, event.EventData{
+			event.KeyError: err.Error(),
+		})
+		return err
 	}
-	t.logEvent(ctx, event.TaskCompleted, "Cascade task completed successfully", nil)
-	t.Status = StatusCompleted
+
+	t.LogEvent(ctx, event.TaskCompleted, "Cascade task completed successfully", nil)
 
 	return nil
-}
-
-// fetchAndValidateAction checks if the action exists and is in PENDING state
-func (t *CascadeTask) fetchAndValidateAction(ctx context.Context, actionID string) (lumera.Action, error) {
-	action, err := t.client.GetAction(ctx, actionID)
-	if err != nil {
-		return lumera.Action{}, fmt.Errorf("failed to get action: %w", err)
-	}
-
-	// Check if action exists
-	if action.ID == "" {
-		return lumera.Action{}, errors.New("no action found with the specified ID")
-	}
-
-	// Check action state
-	if action.State != lumera.ACTION_STATE_PENDING {
-		return lumera.Action{}, fmt.Errorf("action is in %s state, expected PENDING", action.State)
-	}
-
-	return action, nil
 }
 
 func (t *CascadeTask) fetchSupernodes(ctx context.Context, height int64) (lumera.Supernodes, error) {
@@ -169,10 +157,13 @@ func (t *CascadeTask) registerWithSupernodes(ctx context.Context, supernodes lum
 
 	return fmt.Errorf("failed to upload to all supernodes: %w", lastErr)
 }
-func (t *CascadeTask) attemptRegistration(ctx context.Context, index int, sn lumera.Supernode, factory *net.ClientFactory, req *supernodeservice.CascadeSupernodeRegisterRequest) error {
 
-	t.logEvent(ctx, event.TaskProgressRegistrationInProgress, "attempting registration with supernode", map[string]interface{}{
-		"supernode": sn.GrpcEndpoint, "sn-address": sn.CosmosAddress, "iteration": index + 1})
+func (t *CascadeTask) attemptRegistration(ctx context.Context, index int, sn lumera.Supernode, factory *net.ClientFactory, req *supernodeservice.CascadeSupernodeRegisterRequest) error {
+	t.LogEvent(ctx, event.TaskProgressRegistrationInProgress, "attempting registration with supernode", event.EventData{
+		event.KeySupernode:        sn.GrpcEndpoint,
+		event.KeySupernodeAddress: sn.CosmosAddress,
+		event.KeyIteration:        index + 1,
+	})
 
 	client, err := factory.CreateClient(ctx, sn)
 	if err != nil {
@@ -183,8 +174,8 @@ func (t *CascadeTask) attemptRegistration(ctx context.Context, index int, sn lum
 	uploadCtx, cancel := context.WithTimeout(ctx, registrationTimeout)
 	defer cancel()
 
-	req.EventLogger = func(ctx context.Context, evt event.EventType, msg string, data map[string]interface{}) {
-		t.logEvent(ctx, evt, msg, data)
+	req.EventLogger = func(ctx context.Context, evt event.EventType, msg string, data event.EventData) {
+		t.LogEvent(ctx, evt, msg, data)
 	}
 	resp, err := client.RegisterCascade(uploadCtx, req)
 	if err != nil {
@@ -194,10 +185,10 @@ func (t *CascadeTask) attemptRegistration(ctx context.Context, index int, sn lum
 		return fmt.Errorf("upload rejected by %s: %s", sn.CosmosAddress, resp.Message)
 	}
 
-	txhash := CleanTxHash(resp.TxHash)
-	t.logEvent(ctx, event.TxhasReceived, "txhash received", map[string]interface{}{
-		"txhash":    txhash,
-		"supernode": sn.CosmosAddress,
+	// Use txhash directly without cleaning
+	t.LogEvent(ctx, event.TxhasReceived, "txhash received", event.EventData{
+		event.KeyTxHash:    resp.TxHash,
+		event.KeySupernode: sn.CosmosAddress,
 	})
 
 	t.logger.Info(ctx, "upload OK", "taskID", t.TaskID, "address", sn.CosmosAddress)
@@ -205,45 +196,3 @@ func (t *CascadeTask) attemptRegistration(ctx context.Context, index int, sn lum
 }
 
 // logEvent writes a structured log entry **and** emits the SDK event.
-func (t *CascadeTask) logEvent(ctx context.Context, evt event.EventType, msg string, additionalInfo map[string]interface{}) {
-	// Base fields that are always present
-	kvs := []interface{}{
-		"taskID", t.TaskID,
-		"actionID", t.ActionID,
-	}
-
-	// Merge additional fields
-	for k, v := range additionalInfo {
-		kvs = append(kvs, k, v)
-	}
-
-	t.logger.Info(ctx, msg, kvs...)
-	t.EmitEvent(ctx, evt, additionalInfo)
-}
-
-func (t *CascadeTask) fail(ctx context.Context, failureEvent event.EventType, err error) error {
-	t.Status = StatusFailed
-	t.Err = err
-
-	t.logger.Error(ctx, "Task failed", "taskID", t.TaskID, "actionID", t.ActionID, "error", err)
-
-	t.EmitEvent(ctx, failureEvent, map[string]interface{}{
-		"error": err.Error(),
-	})
-	t.EmitEvent(ctx, event.TaskFailed, map[string]interface{}{
-		"error": err.Error(),
-	})
-
-	return err
-}
-
-func CleanTxHash(input string) string {
-	// Split by colon and get the last part
-	parts := strings.Split(input, ":")
-	if len(parts) <= 1 {
-		return input
-	}
-
-	// Return the last part with spaces trimmed
-	return strings.TrimSpace(parts[len(parts)-1])
-}

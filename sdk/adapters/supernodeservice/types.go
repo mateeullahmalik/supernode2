@@ -12,7 +12,7 @@ type LoggerFunc func(
 	ctx context.Context,
 	eventType event.EventType,
 	message string,
-	data map[string]interface{},
+	data event.EventData,
 )
 
 type CascadeSupernodeRegisterRequest struct {
