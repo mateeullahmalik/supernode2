@@ -16,7 +16,11 @@ import (
 //
 //go:generate mockery --name=Client --output=testutil/mocks --outpkg=mocks --filename=client_mock.go
 type Client interface {
-	StartCascade(ctx context.Context, filePath string, actionID string) (string, error)
+	//   - signature: Base64-encoded cryptographic signature of the file's data hash (blake3)
+	//   	1- hash(blake3)  > 2- sign > 3- base64
+	//     The signature must be created by the same account that created the Lumera action.
+	//     It must be a digital signature of the data hash found in the action's CASCADE metadata.
+	StartCascade(ctx context.Context, filePath string, actionID string, signature string) (string, error)
 	DeleteTask(ctx context.Context, taskID string) error
 	GetTask(ctx context.Context, taskID string) (*task.TaskEntry, bool)
 	SubscribeToEvents(ctx context.Context, eventType event.EventType, handler event.Handler) error
@@ -54,7 +58,7 @@ func NewClient(ctx context.Context, config config.Config, logger log.Logger, key
 }
 
 // StartCascade initiates a cascade operation
-func (c *ClientImpl) StartCascade(ctx context.Context, filePath string, actionID string) (string, error) {
+func (c *ClientImpl) StartCascade(ctx context.Context, filePath string, actionID string, signature string) (string, error) {
 	if actionID == "" {
 		c.logger.Error(ctx, "Empty action ID provided")
 		return "", ErrEmptyActionID
@@ -64,7 +68,7 @@ func (c *ClientImpl) StartCascade(ctx context.Context, filePath string, actionID
 		return "", ErrEmptyData
 	}
 
-	taskID, err := c.taskManager.CreateCascadeTask(ctx, filePath, actionID)
+	taskID, err := c.taskManager.CreateCascadeTask(ctx, filePath, actionID, signature)
 	if err != nil {
 		c.logger.Error(ctx, "Failed to create cascade task", "error", err)
 		return "", fmt.Errorf("failed to create cascade task: %w", err)

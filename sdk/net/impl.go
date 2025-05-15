@@ -1,4 +1,3 @@
-// File: impl.go
 package net
 
 import (

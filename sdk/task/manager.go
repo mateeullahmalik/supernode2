@@ -19,7 +19,7 @@ const MAX_EVENT_WORKERS = 100
 //
 //go:generate mockery --name=Manager --output=testutil/mocks --outpkg=mocks --filename=manager_mock.go
 type Manager interface {
-	CreateCascadeTask(ctx context.Context, filePath string, actionID string) (string, error)
+	CreateCascadeTask(ctx context.Context, filePath string, actionID string, signature string) (string, error)
 	GetTask(ctx context.Context, taskID string) (*TaskEntry, bool)
 	DeleteTask(ctx context.Context, taskID string) error
 	SubscribeToEvents(ctx context.Context, eventType event.EventType, handler event.Handler)
@@ -77,32 +77,16 @@ func NewManager(ctx context.Context, config config.Config, logger log.Logger, kr
 	}, nil
 }
 
-// validateAction checks if an action exists and is in PENDING state
-// Moved the validation logic from CascadeTask to Manager
-func (m *ManagerImpl) validateAction(ctx context.Context, actionID string) (lumera.Action, error) {
-	action, err := m.lumeraClient.GetAction(ctx, actionID)
-	if err != nil {
-		return lumera.Action{}, fmt.Errorf("failed to get action: %w", err)
-	}
-
-	// Check if action exists
-	if action.ID == "" {
-		return lumera.Action{}, fmt.Errorf("no action found with the specified ID")
-	}
-
-	// Check action state
-	if action.State != lumera.ACTION_STATE_PENDING {
-		return lumera.Action{}, fmt.Errorf("action is in %s state, expected PENDING", action.State)
-	}
-
-	return action, nil
-}
-
 // CreateCascadeTask creates and starts a Cascade task using the new pattern
-func (m *ManagerImpl) CreateCascadeTask(ctx context.Context, filePath string, actionID string) (string, error) {
+func (m *ManagerImpl) CreateCascadeTask(ctx context.Context, filePath string, actionID, signature string) (string, error) {
 	// First validate the action before creating the task
 	action, err := m.validateAction(ctx, actionID)
 	if err != nil {
+		return "", err
+	}
+
+	// verify signature
+	if err := m.validateSignature(ctx, action, signature); err != nil {
 		return "", err
 	}
 
