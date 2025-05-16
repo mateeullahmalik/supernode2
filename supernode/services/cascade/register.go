@@ -2,6 +2,7 @@ package cascade
 
 import (
 	"context"
+	"os"
 
 	"github.com/LumeraProtocol/supernode/pkg/logtrace"
 )
@@ -10,7 +11,9 @@ import (
 type RegisterRequest struct {
 	TaskID   string
 	ActionID string
-	Data     []byte
+	DataHash []byte
+	DataSize int
+	FilePath string
 }
 
 // RegisterResponse contains the result of upload
@@ -57,7 +60,7 @@ func (task *CascadeRegistrationTask) Register(
 	task.streamEvent(SupernodeEventTypeActionRetrieved, "action has been retrieved", "", send)
 
 	/* 2. Verify action fee -------------------------------------------------------- */
-	if err := task.verifyActionFee(ctx, action, req.Data, fields); err != nil {
+	if err := task.verifyActionFee(ctx, action, req.DataSize, fields); err != nil {
 		return err
 	}
 	logtrace.Info(ctx, "action fee has been validated", fields)
@@ -80,14 +83,14 @@ func (task *CascadeRegistrationTask) Register(
 	task.streamEvent(SupernodeEventTypeMetadataDecoded, "cascade metadata has been decoded", "", send)
 
 	/* 5. Verify data hash --------------------------------------------------------- */
-	if err := task.verifyDataHash(ctx, req.Data, cascadeMeta.DataHash, fields); err != nil {
+	if err := task.verifyDataHash(ctx, req.DataHash, cascadeMeta.DataHash, fields); err != nil {
 		return err
 	}
 	logtrace.Info(ctx, "data-hash has been verified", fields)
 	task.streamEvent(SupernodeEventTypeDataHashVerified, "data-hash has been verified", "", send)
 
 	/* 6. Encode the raw data ------------------------------------------------------ */
-	encResp, err := task.encodeInput(ctx, req.Data, fields)
+	encResp, err := task.encodeInput(ctx, req.FilePath, req.DataSize, fields)
 	if err != nil {
 		return err
 	}
@@ -135,6 +138,11 @@ func (task *CascadeRegistrationTask) Register(
 	fields[logtrace.FieldTxHash] = resp.TxHash
 	logtrace.Info(ctx, "action has been finalized", fields)
 	task.streamEvent(SupernodeEventTypeActionFinalized, "action has been finalized", resp.TxHash, send)
+
+	err = os.RemoveAll(req.FilePath)
+	if err != nil {
+		logtrace.Warn(ctx, "error removing file", fields)
+	}
 
 	return nil
 }

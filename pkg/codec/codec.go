@@ -28,8 +28,9 @@ type Block struct {
 
 // EncodeRequest represents the request to encode a file.
 type EncodeRequest struct {
-	TaskID string
-	Data   []byte
+	TaskID   string
+	Path     string
+	DataSize int
 }
 
 // RaptorQ contains methods for request services from RaptorQ service.

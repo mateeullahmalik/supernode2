@@ -10,7 +10,7 @@ import (
 //
 //go:generate mockgen -destination=mocks/rq_mock.go -package=cascadeadaptormocks -source=rq.go
 type CodecService interface {
-	EncodeInput(ctx context.Context, taskID string, data []byte) (EncodeResult, error)
+	EncodeInput(ctx context.Context, taskID string, path string, dataSize int) (EncodeResult, error)
 }
 
 // EncodeResult represents the outcome of encoding the input data.
@@ -30,10 +30,11 @@ func NewCodecService(codec codec.Codec) CodecService {
 }
 
 // EncodeInput encodes the provided data and returns symbols and metadata.
-func (c *codecImpl) EncodeInput(ctx context.Context, taskID string, data []byte) (EncodeResult, error) {
+func (c *codecImpl) EncodeInput(ctx context.Context, taskID string, path string, dataSize int) (EncodeResult, error) {
 	resp, err := c.codec.Encode(ctx, codec.EncodeRequest{
-		TaskID: taskID,
-		Data:   data,
+		TaskID:   taskID,
+		Path:     path,
+		DataSize: dataSize,
 	})
 	if err != nil {
 		return EncodeResult{}, err
