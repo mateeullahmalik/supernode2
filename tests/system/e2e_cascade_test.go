@@ -261,8 +261,9 @@ func TestCascadeE2E(t *testing.T) {
 
 	ctx := context.Background()
 	encodeRes, err := rqCodec.Encode(ctx, codec.EncodeRequest{
-		Data:   data,
-		TaskID: "1",
+		Path:     testFileFullpath,
+		DataSize: int(fileInfo.Size()),
+		TaskID:   "1",
 	})
 
 	require.NoError(t, err, "Failed to encode data with RaptorQ")

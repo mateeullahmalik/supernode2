@@ -68,8 +68,7 @@ func (task *CascadeRegistrationTask) decodeCascadeMetadata(ctx context.Context, 
 	return meta, nil
 }
 
-func (task *CascadeRegistrationTask) verifyDataHash(ctx context.Context, data []byte, expected string, f logtrace.Fields) error {
-	dh, _ := utils.Blake3Hash(data)
+func (task *CascadeRegistrationTask) verifyDataHash(ctx context.Context, dh []byte, expected string, f logtrace.Fields) error {
 	b64 := utils.B64Encode(dh)
 	if string(b64) != expected {
 		return task.wrapErr(ctx, "data hash doesn't match", errors.New(""), f)
@@ -79,8 +78,8 @@ func (task *CascadeRegistrationTask) verifyDataHash(ctx context.Context, data []
 	return nil
 }
 
-func (task *CascadeRegistrationTask) encodeInput(ctx context.Context, data []byte, f logtrace.Fields) (*adaptors.EncodeResult, error) {
-	resp, err := task.rq.EncodeInput(ctx, task.ID(), data)
+func (task *CascadeRegistrationTask) encodeInput(ctx context.Context, path string, dataSize int, f logtrace.Fields) (*adaptors.EncodeResult, error) {
+	resp, err := task.rq.EncodeInput(ctx, task.ID(), path, dataSize)
 	if err != nil {
 		return nil, task.wrapErr(ctx, "failed to encode data", err, f)
 	}
@@ -201,7 +200,7 @@ func verifyIDs(ticketMetadata, metadata codec.Layout) error {
 
 // verifyActionFee checks if the action fee is sufficient for the given data size
 // It fetches action parameters, calculates the required fee, and compares it with the action price
-func (task *CascadeRegistrationTask) verifyActionFee(ctx context.Context, action *actiontypes.Action, data []byte, fields logtrace.Fields) error {
+func (task *CascadeRegistrationTask) verifyActionFee(ctx context.Context, action *actiontypes.Action, dataSize int, fields logtrace.Fields) error {
 	// Fetch action parameters
 	params, err := task.lumeraClient.GetActionParams(ctx)
 	if err != nil {
@@ -213,8 +212,7 @@ func (task *CascadeRegistrationTask) verifyActionFee(ctx context.Context, action
 	feePerByte := params.Params.FeePerByte.Amount
 
 	// Calculate per-byte fee based on data size
-	dataBytes := len(data)
-	perByteFee := sdk.NewCoin(baseFee.Denom, feePerByte.Mul(math.NewInt(int64(dataBytes))))
+	perByteFee := sdk.NewCoin(baseFee.Denom, feePerByte.Mul(math.NewInt(int64(dataSize))))
 
 	// Calculate total fee
 	requiredFee := baseFee.Add(perByteFee)
@@ -222,7 +220,7 @@ func (task *CascadeRegistrationTask) verifyActionFee(ctx context.Context, action
 	// Log the calculated fee
 	logtrace.Info(ctx, "calculated required fee", logtrace.Fields{
 		"fee":       requiredFee.String(),
-		"dataBytes": dataBytes,
+		"dataBytes": dataSize,
 	})
 	// Check if action price is less than required fee
 	if action.Price.IsLT(requiredFee) {
