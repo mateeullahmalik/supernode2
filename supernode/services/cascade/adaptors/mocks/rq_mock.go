@@ -36,16 +36,16 @@ func (m *MockCodecService) EXPECT() *MockCodecServiceMockRecorder {
 }
 
 // EncodeInput mocks base method.
-func (m *MockCodecService) EncodeInput(ctx context.Context, taskID string, data []byte) (adaptors.EncodeResult, error) {
+func (m *MockCodecService) EncodeInput(ctx context.Context, taskID, path string, dataSize int) (adaptors.EncodeResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "EncodeInput", ctx, taskID, data)
+	ret := m.ctrl.Call(m, "EncodeInput", ctx, taskID, path, dataSize)
 	ret0, _ := ret[0].(adaptors.EncodeResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // EncodeInput indicates an expected call of EncodeInput.
-func (mr *MockCodecServiceMockRecorder) EncodeInput(ctx, taskID, data interface{}) *gomock.Call {
+func (mr *MockCodecServiceMockRecorder) EncodeInput(ctx, taskID, path, dataSize interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EncodeInput", reflect.TypeOf((*MockCodecService)(nil).EncodeInput), ctx, taskID, data)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EncodeInput", reflect.TypeOf((*MockCodecService)(nil).EncodeInput), ctx, taskID, path, dataSize)
 }
