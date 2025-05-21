@@ -23,6 +23,10 @@ const (
 	loadSymbolsBatchSize = 2500
 	storeSymbolsPercent  = 10
 	concurrency          = 1
+
+	UnknownDataType        = iota // 1
+	P2PDataRaptorQSymbol          // 1
+	P2PDataCascadeMetadata        // 2
 )
 
 // StorageHandler provides common logic for RQ and P2P operations

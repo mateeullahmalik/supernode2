@@ -67,19 +67,19 @@ func (mr *MockLumeraClientMockRecorder) GetAction(ctx, actionID interface{}) *go
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAction", reflect.TypeOf((*MockLumeraClient)(nil).GetAction), ctx, actionID)
 }
 
-// GetActionParams mocks base method.
-func (m *MockLumeraClient) GetActionParams(ctx context.Context) (*types.QueryParamsResponse, error) {
+// GetActionFee mocks base method.
+func (m *MockLumeraClient) GetActionFee(ctx context.Context, dataSize string) (*types.QueryGetActionFeeResponse, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetActionParams", ctx)
-	ret0, _ := ret[0].(*types.QueryParamsResponse)
+	ret := m.ctrl.Call(m, "GetActionFee", ctx, dataSize)
+	ret0, _ := ret[0].(*types.QueryGetActionFeeResponse)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// GetActionParams indicates an expected call of GetActionParams.
-func (mr *MockLumeraClientMockRecorder) GetActionParams(ctx interface{}) *gomock.Call {
+// GetActionFee indicates an expected call of GetActionFee.
+func (mr *MockLumeraClientMockRecorder) GetActionFee(ctx, dataSize interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetActionParams", reflect.TypeOf((*MockLumeraClient)(nil).GetActionParams), ctx)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetActionFee", reflect.TypeOf((*MockLumeraClient)(nil).GetActionFee), ctx, dataSize)
 }
 
 // GetTopSupernodes mocks base method.

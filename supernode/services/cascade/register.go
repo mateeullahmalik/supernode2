@@ -129,7 +129,7 @@ func (task *CascadeRegistrationTask) Register(
 	logtrace.Info(ctx, "artefacts have been stored", fields)
 	task.streamEvent(SupernodeEventTypeArtefactsStored, "artefacts have been stored", "", send)
 
-	resp, err := task.lumeraClient.FinalizeAction(ctx, action.ActionID, rqidResp.RQIDs)
+	resp, err := task.LumeraClient.FinalizeAction(ctx, action.ActionID, rqidResp.RQIDs)
 	if err != nil {
 		fields[logtrace.FieldError] = err.Error()
 		logtrace.Info(ctx, "Finalize Action Error", fields)

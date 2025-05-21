@@ -15,9 +15,9 @@ type CascadeService struct {
 	*common.SuperNodeService
 	config *Config
 
-	lumeraClient adaptors.LumeraClient
-	p2p          adaptors.P2PService
-	rq           adaptors.CodecService
+	LumeraClient adaptors.LumeraClient
+	P2P          adaptors.P2PService
+	RQ           adaptors.CodecService
 }
 
 // NewCascadeRegistrationTask creates a new task for cascade registration
@@ -37,8 +37,8 @@ func NewCascadeService(config *Config, lumera lumera.Client, p2pClient p2p.Clien
 	return &CascadeService{
 		config:           config,
 		SuperNodeService: common.NewSuperNodeService(p2pClient),
-		lumeraClient:     adaptors.NewLumeraClient(lumera),
-		p2p:              adaptors.NewP2PService(p2pClient, rqstore),
-		rq:               adaptors.NewCodecService(codec),
+		LumeraClient:     adaptors.NewLumeraClient(lumera),
+		P2P:              adaptors.NewP2PService(p2pClient, rqstore),
+		RQ:               adaptors.NewCodecService(codec),
 	}
 }
