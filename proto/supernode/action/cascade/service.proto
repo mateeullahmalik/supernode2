@@ -5,7 +5,7 @@ option go_package = "github.com/LumeraProtocol/supernode/gen/supernode/action/ca
 service CascadeService {
   rpc Register (stream RegisterRequest) returns (stream RegisterResponse);
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
-
+  rpc Download (DownloadRequest) returns (stream DownloadResponse);
 }
 
 message RegisterRequest {
@@ -30,6 +30,22 @@ message RegisterResponse {
   string tx_hash = 3;
 }
 
+message DownloadRequest {
+  string action_id = 1;
+}
+
+message DownloadResponse {
+  oneof response_type {
+    DownloadEvent event = 1;
+    DataChunk chunk = 2;
+  }
+}
+
+message DownloadEvent {
+  SupernodeEventType event_type = 1;
+  string message = 2;
+}
+
 enum SupernodeEventType {
   UNKNOWN = 0;
   ACTION_RETRIEVED = 1;
@@ -43,6 +59,7 @@ enum SupernodeEventType {
   RQID_VERIFIED = 9;
   ARTEFACTS_STORED = 10;
   ACTION_FINALIZED = 11;
+  Artefacts_Downloaded = 12;
 }
 
 message HealthCheckRequest {}
