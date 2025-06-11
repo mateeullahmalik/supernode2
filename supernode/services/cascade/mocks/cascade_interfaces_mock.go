@@ -72,6 +72,20 @@ func (m *MockRegistrationTaskService) EXPECT() *MockRegistrationTaskServiceMockR
 	return m.recorder
 }
 
+// Download mocks base method.
+func (m *MockRegistrationTaskService) Download(ctx context.Context, req *cascade.DownloadRequest, send func(*cascade.DownloadResponse) error) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Download", ctx, req, send)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Download indicates an expected call of Download.
+func (mr *MockRegistrationTaskServiceMockRecorder) Download(ctx, req, send interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Download", reflect.TypeOf((*MockRegistrationTaskService)(nil).Download), ctx, req, send)
+}
+
 // HealthCheck mocks base method.
 func (m *MockRegistrationTaskService) HealthCheck(ctx context.Context) (cascade.HealthCheckResponse, error) {
 	m.ctrl.T.Helper()
