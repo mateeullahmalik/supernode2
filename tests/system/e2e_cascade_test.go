@@ -99,9 +99,7 @@ func TestCascadeE2E(t *testing.T) {
 			"tx", "supernode", "register-supernode",
 			valAddr,             // validator address
 			"localhost:" + port, // IP address with unique port
-			"1.0.0",             // version
 			addr,                // supernode account
-			p2pPort,             // p2p port
 			"--from", nodeKey,
 		}
 
