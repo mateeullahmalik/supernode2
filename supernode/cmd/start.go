@@ -21,6 +21,7 @@ import (
 	"github.com/LumeraProtocol/supernode/supernode/node/supernode/server"
 	cascadeService "github.com/LumeraProtocol/supernode/supernode/services/cascade"
 	"github.com/LumeraProtocol/supernode/supernode/services/common"
+	supernodeService "github.com/LumeraProtocol/supernode/supernode/services/common/supernode"
 
 	cKeyring "github.com/cosmos/cosmos-sdk/crypto/keyring"
 	"github.com/spf13/cobra"
@@ -103,6 +104,11 @@ The supernode will connect to the Lumera network and begin participating in the 
 		// Create cascade action server
 		cascadeActionServer := cascade.NewCascadeActionServer(cService)
 
+		// Create supernode status service
+		statusService := supernodeService.NewSupernodeStatusService()
+		statusService.RegisterTaskProvider(cService)
+		supernodeServer := server.NewSupernodeServer(statusService)
+
 		// Configure server
 		serverConfig := &server.Config{
 
@@ -117,6 +123,7 @@ The supernode will connect to the Lumera network and begin participating in the 
 			kr,
 			lumeraClient,
 			cascadeActionServer,
+			supernodeServer,
 		)
 		if err != nil {
 			return fmt.Errorf("failed to create gRPC server: %w", err)

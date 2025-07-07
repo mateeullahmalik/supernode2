@@ -4,11 +4,12 @@ import (
 	"context"
 	"testing"
 
-	"github.com/LumeraProtocol/supernode/supernode/services/common"
+	"github.com/LumeraProtocol/supernode/supernode/services/common/base"
+	"github.com/LumeraProtocol/supernode/supernode/services/common/supernode"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestHealthCheck(t *testing.T) {
+func TestGetStatus(t *testing.T) {
 	ctx := context.Background()
 
 	tests := []struct {
@@ -41,10 +42,8 @@ func TestHealthCheck(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Setup service and worker
 			service := &CascadeService{
-				SuperNodeService: common.NewSuperNodeService(nil),
+				SuperNodeService: base.NewSuperNodeService(nil),
 			}
-
-			var primaryTask *CascadeRegistrationTask
 
 			go func() {
 				service.RunHelper(ctx, "node-id", "prefix")
@@ -54,17 +53,10 @@ func TestHealthCheck(t *testing.T) {
 			for i := 0; i < tt.taskCount; i++ {
 				task := NewCascadeRegistrationTask(service)
 				service.Worker.AddTask(task)
-				if i == 0 {
-					primaryTask = task
-				}
 			}
 
-			// Always call HealthCheck from first task (if any), otherwise create a temp one
-			if primaryTask == nil {
-				primaryTask = NewCascadeRegistrationTask(service)
-			}
-
-			resp, err := primaryTask.HealthCheck(ctx)
+			// Call GetStatus from service
+			resp, err := service.GetStatus(ctx)
 			if tt.expectErr {
 				assert.Error(t, err)
 				return
@@ -81,8 +73,28 @@ func TestHealthCheck(t *testing.T) {
 			assert.True(t, resp.Memory.Used <= resp.Memory.Total)
 			assert.True(t, resp.Memory.UsedPerc >= 0 && resp.Memory.UsedPerc <= 100)
 
-			// Task count check
-			assert.Equal(t, tt.expectTasks, len(resp.TasksInProgress))
+			// Available services check
+			assert.Contains(t, resp.AvailableServices, "cascade")
+
+			// Task count check - look for cascade service in the services list
+			var cascadeService *supernode.ServiceTasks
+			for _, service := range resp.Services {
+				if service.ServiceName == "cascade" {
+					cascadeService = &service
+					break
+				}
+			}
+
+			if tt.expectTasks > 0 {
+				assert.NotNil(t, cascadeService, "cascade service should be present")
+				assert.Equal(t, tt.expectTasks, int(cascadeService.TaskCount))
+				assert.Equal(t, tt.expectTasks, len(cascadeService.TaskIDs))
+			} else {
+				// If no tasks expected, either no cascade service or empty task count
+				if cascadeService != nil {
+					assert.Equal(t, 0, int(cascadeService.TaskCount))
+				}
+			}
 		})
 	}
 }
