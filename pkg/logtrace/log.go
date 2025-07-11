@@ -18,10 +18,22 @@ type ContextKey string
 const CorrelationIDKey ContextKey = "correlation_id"
 
 // Setup initializes the logger with a specified log level
-func Setup(serviceName, env string, level slog.Level) {
+func Setup(serviceName, env string, level string) {
+	var slogLevel slog.Level
+	switch level {
+	case "warn":
+		slogLevel = slog.LevelWarn
+	case "error":
+		slogLevel = slog.LevelError
+	case "debug":
+		slogLevel = slog.LevelDebug
+	default:
+		slogLevel = slog.LevelInfo
+	}
+
 	opts := &slog.HandlerOptions{
-		AddSource: true,
-		Level:     level,
+		AddSource: false,
+		Level:     slogLevel,
 	}
 
 	hostname, _ := os.Hostname()
@@ -32,23 +44,26 @@ func Setup(serviceName, env string, level slog.Level) {
 }
 
 // log logs a message with additional fields using the specified log function.
-func log(logFunc LogLevel, message string, fields Fields) {
+func log(logLevel slog.Level, logFunc LogLevel, message string, fields Fields) {
 	fieldArgs := make([]interface{}, 0, len(fields)*2+1)
 
-	pc, file, line, ok := runtime.Caller(2)
-	if ok {
-		details := runtime.FuncForPC(pc)
-		fieldArgs = append(fieldArgs, slog.Group(
-			"source",
-			slog.Attr{Key: "filename", Value: slog.StringValue(file)},
-			slog.Attr{Key: "lineno", Value: slog.IntValue(line)},
-			slog.Attr{Key: "function", Value: slog.StringValue(details.Name())},
-		))
+	// Only attach source info for TRACE/DEBUG level
+	if logLevel == slog.LevelDebug || logLevel == slog.LevelError {
+		if pc, file, line, ok := runtime.Caller(2); ok {
+			details := runtime.FuncForPC(pc)
+			fieldArgs = append(fieldArgs, slog.Group(
+				"source",
+				slog.String("filename", file),
+				slog.Int("lineno", line),
+				slog.String("function", details.Name()),
+			))
+		}
 	}
 
 	for key, value := range fields {
 		fieldArgs = append(fieldArgs, slog.Any(key, value))
 	}
+
 	logFunc(message, fieldArgs...)
 }
 
@@ -70,22 +85,22 @@ func addCorrelationID(ctx context.Context, fields Fields) Fields {
 
 // Error logs an error message with structured fields.
 func Error(ctx context.Context, message string, fields Fields) {
-	log(slog.Error, message, addCorrelationID(ctx, fields))
+	log(slog.LevelError, slog.Error, message, addCorrelationID(ctx, fields))
 }
 
 // Info logs an informational message with structured fields.
 func Info(ctx context.Context, message string, fields Fields) {
-	log(slog.Info, message, addCorrelationID(ctx, fields))
+	log(slog.LevelInfo, slog.Info, message, addCorrelationID(ctx, fields))
 }
 
 // Warn logs a warning message with structured fields.
 func Warn(ctx context.Context, message string, fields Fields) {
-	log(slog.Warn, message, addCorrelationID(ctx, fields))
+	log(slog.LevelWarn, slog.Warn, message, addCorrelationID(ctx, fields))
 }
 
 // Debug logs a debug message with structured fields.
 func Debug(ctx context.Context, message string, fields Fields) {
-	log(slog.Debug, message, addCorrelationID(ctx, fields))
+	log(slog.LevelDebug, slog.Debug, message, addCorrelationID(ctx, fields))
 }
 
 // CtxWithCorrelationID stores a correlation ID inside the context.
