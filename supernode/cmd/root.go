@@ -16,7 +16,7 @@ var (
 )
 
 const (
-	DefaultConfigFile = "config.yaml"
+	DefaultConfigFile = "config.yml"
 	DefaultBaseDir    = ".supernode"
 )
 
@@ -37,7 +37,7 @@ func findConfigFile(baseDirPath string) string {
 	if baseDirPath != "" {
 		searchPaths := []string{
 			filepath.Join(baseDirPath, DefaultConfigFile),
-			filepath.Join(baseDirPath, "config.yml"),
+			filepath.Join(baseDirPath, "config.yaml"),
 		}
 
 		// Return first existing config file
@@ -82,8 +82,16 @@ var rootCmd = &cobra.Command{
 	Long: `A command line tool for managing Lumera blockchain keys.
 This application allows you to create and recover keys using mnemonics.`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		// Skip config loading for help command
-		if cmd.Name() == "help" {
+		// Skip config loading for help command and init command
+		if cmd.Name() == "help" || cmd.Name() == "init" {
+			// For init command, we still need to set up the base directory
+			if cmd.Name() == "init" {
+				var err error
+				baseDir, err = setupBaseDir()
+				if err != nil {
+					return err
+				}
+			}
 			return nil
 		}
 

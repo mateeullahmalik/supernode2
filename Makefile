@@ -1,4 +1,4 @@
-.PHONY: test-unit test-integration test-system install-lumera setup-supernodes system-test-setup build build-release
+make .PHONY: test-unit test-integration test-system install-lumera setup-supernodes system-test-setup build build-release
 
 # Build variables
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")

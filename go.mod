@@ -4,6 +4,10 @@ go 1.24.1
 
 replace github.com/LumeraProtocol/supernode/supernode => ./supernode
 
+replace github.com/bytedance/sonic => github.com/bytedance/sonic v1.13.2
+
+replace github.com/bytedance/sonic/loader => github.com/bytedance/sonic/loader v0.2.4
+
 require (
 	cosmossdk.io/math v1.5.3
 	github.com/LumeraProtocol/lumera v1.6.0
@@ -60,10 +64,9 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bgentry/speakeasy v0.1.1-0.20220910012023-760eaf8b6816 // indirect
 	github.com/bytedance/sonic v1.12.3 // indirect
-	github.com/bytedance/sonic/loader v0.2.0 // indirect
+	github.com/bytedance/sonic/loader v0.2.4 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/cloudwego/base64x v0.1.4 // indirect
-	github.com/cloudwego/iasm v0.2.0 // indirect
+	github.com/cloudwego/base64x v0.1.5 // indirect
 	github.com/cockroachdb/errors v1.11.3 // indirect
 	github.com/cockroachdb/fifo v0.0.0-20240606204812-0bbfbd93a7ce // indirect
 	github.com/cockroachdb/logtags v0.0.0-20230118201751-21c54148d20b // indirect

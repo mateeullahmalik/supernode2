@@ -70,9 +70,45 @@ raptorq:
   files_dir: "raptorq_files"
 ```
 
-## Key Management
+## Initialization and Key Management
 
-### Create a New Key
+### Initialize a Supernode
+
+The easiest way to set up a supernode is to use the `init` command, which creates a configuration file and sets up keys in one step:
+
+```bash
+supernode init mykey --chain-id lumera
+```
+
+This will:
+1. Create a `config.yml` file in your base directory (default: `~/.supernode/config.yml`)
+2. Generate a new key with the specified name
+3. Update the configuration with the key's address
+4. Output the key information, including the mnemonic
+
+To recover an existing key during initialization:
+
+```bash
+supernode init mykey --recover --mnemonic "your mnemonic words here" --chain-id lumera
+```
+
+Additional options:
+```bash
+# Use a specific keyring backend
+supernode init mykey --keyring-backend file --chain-id lumera
+
+# Use a custom keyring directory
+supernode init mykey --keyring-dir /path/to/keys --chain-id lumera
+
+# Use a custom base directory
+supernode init -d /path/to/basedir mykey --chain-id lumera
+```
+
+### Manual Key Management
+
+If you prefer to manage keys manually, you can use the following commands:
+
+#### Create a New Key
 
 Create a new key (use the same name you specified in your config):
 
@@ -85,7 +121,7 @@ This will output an address like:
 lumera15t2e8gjgmuqtj4jzjqfkf3tf5l8vqw69hmrzmr
 ```
 
-### Recover an Existing Key
+#### Recover an Existing Key
 
 If you have an existing mnemonic phrase:
 
@@ -93,15 +129,15 @@ If you have an existing mnemonic phrase:
 supernode keys recover mykey <MNEMONIC>  # Use quotes if the mnemonic contains spaces, e.g., "word1 word2 word3"
 ```
 
-### List Keys
+#### List Keys
 
 ```bash
 supernode keys list
 ```
 
-### Update Configuration with Your Address
+#### Update Configuration with Your Address
 
-⚠️ **IMPORTANT:** After generating or recovering a key, you MUST update your `config.yml` with the generated address:
+⚠️ **IMPORTANT:** After manually generating or recovering a key, you MUST update your `config.yml` with the generated address:
 
 ```yaml
 supernode:
@@ -111,6 +147,8 @@ supernode:
   port: 4444
 # ... rest of config
 ```
+
+Note: This step is done automatically when using the `init` command.
 
 ## Running the Supernode
 
