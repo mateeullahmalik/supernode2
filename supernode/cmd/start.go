@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -35,8 +34,7 @@ var startCmd = &cobra.Command{
 The supernode will connect to the Lumera network and begin participating in the network.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Initialize logging
-		logLevel := slog.LevelInfo
-		logtrace.Setup("supernode", "dev", logLevel)
+		logtrace.Setup("supernode", "dev", appConfig.LogConfig.Level)
 
 		// Create context with correlation ID for tracing
 		ctx := logtrace.CtxWithCorrelationID(context.Background(), "supernode-start")

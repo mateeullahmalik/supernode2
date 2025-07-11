@@ -39,12 +39,17 @@ type RaptorQConfig struct {
 	FilesDir string `yaml:"files_dir"`
 }
 
+type LogConfig struct {
+	Level string `yaml:"level"`
+}
+
 type Config struct {
 	SupernodeConfig    `yaml:"supernode"`
 	KeyringConfig      `yaml:"keyring"`
 	P2PConfig          `yaml:"p2p"`
 	LumeraClientConfig `yaml:"lumera"`
 	RaptorQConfig      `yaml:"raptorq"`
+	LogConfig          `yaml:"log"`
 
 	// Store base directory (not from YAML)
 	BaseDir string `yaml:"-"`
@@ -135,11 +140,12 @@ func LoadConfig(filename string, baseDir string) (*Config, error) {
 		return nil, err
 	}
 
-	logtrace.Info(ctx, "Configuration loaded successfully", logtrace.Fields{
+	logtrace.Debug(ctx, "Configuration loaded successfully", logtrace.Fields{
 		"baseDir":         baseDir,
 		"keyringDir":      config.GetKeyringDir(),
 		"p2pDataDir":      config.GetP2PDataDir(),
 		"raptorqFilesDir": config.GetRaptorQFilesDir(),
+		"logLevel":        config.LogConfig.Level,
 	})
 
 	return &config, nil

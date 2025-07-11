@@ -27,3 +27,7 @@ lumera:
 # RaptorQ Configuration
 raptorq:
   files_dir: "raptorq_files"
+
+#Logging Configuration
+log:
+  level: "info" #debug, info, warn, error
