@@ -3,8 +3,10 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
+	"syscall"
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/LumeraProtocol/supernode/pkg/keyring"
@@ -18,6 +20,13 @@ var (
 	forceInit          bool
 	skipInteractive    bool
 	keyringBackendFlag string
+	keyNameFlag        string
+	shouldRecoverFlag  bool
+	mnemonicFlag       string
+	supernodeAddrFlag  string
+	supernodePortFlag  int
+	lumeraGrpcFlag     string
+	chainIDFlag        string
 )
 
 // Default configuration values
@@ -27,7 +36,7 @@ const (
 	DefaultSupernodeAddr  = "0.0.0.0"
 	DefaultSupernodePort  = 4444
 	DefaultLumeraGRPC     = "localhost:9090"
-	DefaultChainID        = "lumera"
+	DefaultChainID        = "lumera-mainnet-1"
 )
 
 // InitInputs holds all user inputs for initialization
@@ -60,14 +69,34 @@ Example:
   supernode init -y       # Use default values, skip interactive prompts`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Set up signal handling for graceful exit
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+		// Create a channel to communicate when the command is done
+		done := make(chan struct{})
+
+		// Handle signals in a separate goroutine
+		go func() {
+			select {
+			case <-sigCh:
+				fmt.Println("\nInterrupted. Exiting...")
+				os.Exit(0)
+			case <-done:
+				return
+			}
+		}()
+
 		// Setup base directory
 		if err := setupBaseDirectory(); err != nil {
+			close(done)
 			return err
 		}
 
 		// Get user inputs through interactive prompts or use defaults
 		inputs, err := gatherUserInputs()
 		if err != nil {
+			close(done)
 			return err
 		}
 
@@ -76,13 +105,14 @@ Example:
 			return err
 		}
 
-		// Setup keyring and handle key creation/recovery (skip if using -y flag)
+		// Setup keyring and handle key creation/recovery
 		var address string
-		if !skipInteractive {
-			address, err = setupKeyring(inputs.KeyName, inputs.ShouldRecover, inputs.Mnemonic)
-			if err != nil {
-				return err
-			}
+		var generatedMnemonic string
+
+		// Always setup keyring, even in non-interactive mode
+		address, generatedMnemonic, err = setupKeyring(inputs.KeyName, inputs.ShouldRecover, inputs.Mnemonic)
+		if err != nil {
+			return err
 		}
 
 		// Update config with gathered settings and save
@@ -91,7 +121,7 @@ Example:
 		}
 
 		// Print success message
-		printSuccessMessage()
+		printSuccessMessage(generatedMnemonic)
 		return nil
 	},
 }
@@ -135,24 +165,61 @@ func setupBaseDirectory() error {
 	return nil
 }
 
-// gatherUserInputs collects all user inputs through interactive prompts or uses defaults
+// gatherUserInputs collects all user inputs through interactive prompts or uses defaults/flags
 func gatherUserInputs() (InitInputs, error) {
-	if skipInteractive {
-		// Use default values when -y flag is set
-		fmt.Println("Using default configuration values...")
+	// Check if all required parameters are provided via flags
+	allFlagsProvided := keyNameFlag != "" &&
+		(supernodeAddrFlag != "" || supernodePortFlag != 0 || lumeraGrpcFlag != "" || chainIDFlag != "")
+
+	// If -y flag is set or all flags are provided, use flags or defaults
+	if skipInteractive || allFlagsProvided {
+		fmt.Println("Using provided flags or default configuration values...")
+
+		// Use flags if provided, otherwise use defaults
 		backend := DefaultKeyringBackend
 		if keyringBackendFlag != "" {
 			backend = keyringBackendFlag
 		}
+
+		keyName := DefaultKeyName
+		if keyNameFlag != "" {
+			keyName = keyNameFlag
+		}
+
+		supernodeAddr := DefaultSupernodeAddr
+		if supernodeAddrFlag != "" {
+			supernodeAddr = supernodeAddrFlag
+		}
+
+		supernodePort := DefaultSupernodePort
+		if supernodePortFlag != 0 {
+			supernodePort = supernodePortFlag
+		}
+
+		lumeraGRPC := DefaultLumeraGRPC
+		if lumeraGrpcFlag != "" {
+			lumeraGRPC = lumeraGrpcFlag
+		}
+
+		chainID := DefaultChainID
+		if chainIDFlag != "" {
+			chainID = chainIDFlag
+		}
+
+		// Check if mnemonic is provided when recover flag is set
+		if shouldRecoverFlag && mnemonicFlag == "" {
+			return InitInputs{}, fmt.Errorf("--mnemonic flag is required when --recover flag is set")
+		}
+
 		return InitInputs{
 			KeyringBackend: backend,
-			KeyName:        "",
-			ShouldRecover:  false,
-			Mnemonic:       "",
-			SupernodeAddr:  DefaultSupernodeAddr,
-			SupernodePort:  DefaultSupernodePort,
-			LumeraGRPC:     DefaultLumeraGRPC,
-			ChainID:        DefaultChainID,
+			KeyName:        keyName,
+			ShouldRecover:  shouldRecoverFlag,
+			Mnemonic:       mnemonicFlag,
+			SupernodeAddr:  supernodeAddr,
+			SupernodePort:  supernodePort,
+			LumeraGRPC:     lumeraGRPC,
+			ChainID:        chainID,
 		}, nil
 	}
 
@@ -198,27 +265,30 @@ func createAndSetupConfig(keyName, chainID, keyringBackend string) error {
 }
 
 // setupKeyring initializes keyring and handles key creation or recovery
-func setupKeyring(keyName string, shouldRecover bool, mnemonic string) (string, error) {
+// Returns address and mnemonic (if a new key was created)
+func setupKeyring(keyName string, shouldRecover bool, mnemonic string) (string, string, error) {
 	kr, err := initKeyringFromConfig(appConfig)
 	if err != nil {
-		return "", fmt.Errorf("failed to initialize keyring: %w", err)
+		return "", "", fmt.Errorf("failed to initialize keyring: %w", err)
 	}
 
 	var address string
+	var generatedMnemonic string
 
 	if shouldRecover {
 		address, err = recoverExistingKey(kr, keyName, mnemonic)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 	} else {
-		address, err = createNewKey(kr, keyName)
+		address, generatedMnemonic, err = createNewKey(kr, keyName)
 		if err != nil {
-			return "", err
+			return "", "", err
+
 		}
 	}
 
-	return address, nil
+	return address, generatedMnemonic, nil
 }
 
 // recoverExistingKey handles the recovery of an existing key from mnemonic
@@ -247,24 +317,25 @@ func recoverExistingKey(kr consmoskeyring.Keyring, keyName, mnemonic string) (st
 }
 
 // createNewKey handles the creation of a new key
-func createNewKey(kr consmoskeyring.Keyring, keyName string) (string, error) {
+func createNewKey(kr consmoskeyring.Keyring, keyName string) (string, string, error) {
 	// Generate mnemonic and create new account
 	keyMnemonic, info, err := keyring.CreateNewAccount(kr, keyName)
 	if err != nil {
-		return "", fmt.Errorf("failed to create new account: %w", err)
+		return "", "", fmt.Errorf("failed to create new account: %w", err)
 	}
 
 	addr, err := getAddressFromKeyName(kr, keyName)
 	if err != nil {
-		return "", fmt.Errorf("failed to get address: %w", err)
+		return "", "", fmt.Errorf("failed to get address: %w", err)
 	}
 	address := addr.String()
 
-	fmt.Printf("Key generated successfully! Name: %s, Address: %s, Mnemonic: %s\n", info.Name, address, keyMnemonic)
+	fmt.Printf("Key generated successfully! Name: %s, Address: %s\n", info.Name, address)
 	fmt.Println("\nIMPORTANT: Write down the mnemonic and keep it in a safe place.")
 	fmt.Println("The mnemonic is the only way to recover your account if you forget your password.")
+	fmt.Printf("Mnemonic: %s\n", keyMnemonic)
 
-	return address, nil
+	return address, keyMnemonic, nil
 }
 
 // updateAndSaveConfig updates the configuration with network settings and saves it
@@ -287,9 +358,16 @@ func updateAndSaveConfig(address, supernodeAddr string, supernodePort int, lumer
 }
 
 // printSuccessMessage displays the final success message
-func printSuccessMessage() {
+func printSuccessMessage(mnemonic string) {
 	fmt.Println("\nYour supernode has been initialized successfully!")
-	fmt.Println("You can now start your supernode with:")
+
+	// If a mnemonic was generated, display it again
+	if mnemonic != "" {
+		fmt.Println("\nIMPORTANT: Make sure you have saved your mnemonic:")
+		fmt.Printf("Mnemonic: %s\n", mnemonic)
+	}
+
+	fmt.Println("\nYou can now start your supernode with:")
 	fmt.Println("  supernode start")
 }
 
@@ -300,32 +378,47 @@ func promptKeyringBackend() (string, error) {
 		Message: "Choose keyring backend:",
 		Options: []string{"os", "file", "test"},
 		Default: "os",
-		Help:    "os: OS keyring (most secure), file: encrypted file, test: unencrypted (dev only)",
+		Help:    "os: OS keyring (most secure), file: encrypted file, test: unencrypted (dev only), Ctrl-C for exit",
 	}
 	return backend, survey.AskOne(prompt, &backend)
 }
 
 func promptKeyManagement() (keyName string, shouldRecover bool, mnemonic string, err error) {
-	shouldRecover = true
-
 	// Key name input with validation
 	keyNamePrompt := &survey.Input{
 		Message: "Enter key name:",
-		Help:    "Alphanumeric characters and underscores only",
+		Help:    "Alphanumeric characters and underscores only, Ctrl-C for exit",
 	}
 	err = survey.AskOne(keyNamePrompt, &keyName, survey.WithValidator(survey.Required))
 	if err != nil {
 		return "", false, "", err
 	}
 
-	// Mnemonic input for recovery
-	mnemonicPrompt := &survey.Password{
-		Message: "Enter your mnemonic phrase:",
-		Help:    "Space-separated words (typically 12 or 24 words)",
+	// Ask whether to create a new address or recover from mnemonic
+	createOrRecoverPrompt := &survey.Select{
+		Message: "Would you like to create a new address or recover from mnemonic?",
+		Options: []string{"Create new address", "Recover from mnemonic"},
+		Default: "Create new address",
+		Help:    "Create a new address or recover an existing one from mnemonic, Ctrl-C for exit",
 	}
-	err = survey.AskOne(mnemonicPrompt, &mnemonic, survey.WithValidator(survey.Required))
+	var createOrRecover string
+	err = survey.AskOne(createOrRecoverPrompt, &createOrRecover)
 	if err != nil {
 		return "", false, "", err
+	}
+
+	shouldRecover = createOrRecover == "Recover from mnemonic"
+
+	// If recovering, ask for mnemonic
+	if shouldRecover {
+		mnemonicPrompt := &survey.Password{
+			Message: "Enter your mnemonic phrase:",
+			Help:    "Space-separated words (typically 12 or 24 words), Ctrl-C for exit",
+		}
+		err = survey.AskOne(mnemonicPrompt, &mnemonic, survey.WithValidator(survey.Required))
+		if err != nil {
+			return "", false, "", err
+		}
 	}
 
 	return keyName, shouldRecover, mnemonic, nil
@@ -336,6 +429,7 @@ func promptNetworkConfig() (supernodeAddr string, supernodePort int, lumeraGrpcA
 	supernodePrompt := &survey.Input{
 		Message: "Enter supernode IP address:",
 		Default: DefaultSupernodeAddr,
+		Help:    "IP address for the supernode to listen on, Ctrl-C for exit",
 	}
 	err = survey.AskOne(supernodePrompt, &supernodeAddr)
 	if err != nil {
@@ -347,6 +441,7 @@ func promptNetworkConfig() (supernodeAddr string, supernodePort int, lumeraGrpcA
 	supernodePortPrompt := &survey.Input{
 		Message: "Enter supernode port:",
 		Default: fmt.Sprintf("%d", DefaultSupernodePort),
+		Help:    "Port for the supernode to listen on (1-65535), Ctrl-C for exit",
 	}
 	err = survey.AskOne(supernodePortPrompt, &portStr)
 	if err != nil {
@@ -362,6 +457,7 @@ func promptNetworkConfig() (supernodeAddr string, supernodePort int, lumeraGrpcA
 	lumeraPrompt := &survey.Input{
 		Message: "Enter Lumera GRPC address:",
 		Default: DefaultLumeraGRPC,
+		Help:    "GRPC address of the Lumera node (host:port), Ctrl-C for exit",
 	}
 	err = survey.AskOne(lumeraPrompt, &lumeraGrpcAddr)
 	if err != nil {
@@ -372,6 +468,7 @@ func promptNetworkConfig() (supernodeAddr string, supernodePort int, lumeraGrpcA
 	chainPrompt := &survey.Input{
 		Message: "Enter chain ID:",
 		Default: DefaultChainID,
+		Help:    "Chain ID of the Lumera network, Ctrl-C for exit",
 	}
 	err = survey.AskOne(chainPrompt, &chainID, survey.WithValidator(survey.Required))
 	if err != nil {
@@ -388,4 +485,11 @@ func init() {
 	initCmd.Flags().BoolVar(&forceInit, "force", false, "Force initialization, overwriting existing directory")
 	initCmd.Flags().BoolVarP(&skipInteractive, "yes", "y", false, "Skip interactive prompts and use default values")
 	initCmd.Flags().StringVar(&keyringBackendFlag, "keyring-backend", "", "Keyring backend to use with -y flag (test, file, os)")
+	initCmd.Flags().StringVar(&keyNameFlag, "key-name", "", "Name of the key to create or recover")
+	initCmd.Flags().BoolVar(&shouldRecoverFlag, "recover", false, "Recover an existing key from mnemonic")
+	initCmd.Flags().StringVar(&mnemonicFlag, "mnemonic", "", "Mnemonic phrase for key recovery (only used with --recover)")
+	initCmd.Flags().StringVar(&supernodeAddrFlag, "supernode-addr", "", "IP address for the supernode to listen on")
+	initCmd.Flags().IntVar(&supernodePortFlag, "supernode-port", 0, "Port for the supernode to listen on")
+	initCmd.Flags().StringVar(&lumeraGrpcFlag, "lumera-grpc", "", "GRPC address of the Lumera node (host:port)")
+	initCmd.Flags().StringVar(&chainIDFlag, "chain-id", "", "Chain ID of the Lumera network")
 }
