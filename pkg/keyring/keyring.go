@@ -2,6 +2,8 @@ package keyring
 
 import (
 	"fmt"
+	"io"
+	"os"
 
 	"github.com/cosmos/cosmos-sdk/codec"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
@@ -70,12 +72,18 @@ func InitKeyring(backend, dir string) (keyring.Keyring, error) {
 	cryptocodec.RegisterInterfaces(interfaceRegistry)
 	cdc := codec.NewProtoCodec(interfaceRegistry)
 
+	// Create keyring with proper stdin handling
+	var stdin io.Reader = os.Stdin
+	if backendType == "test" {
+		stdin = nil // Only use nil for test backend
+	}
+
 	// Create keyring
 	kr, err := keyring.New(
 		KeyringServiceName,
 		backendType,
 		dir,
-		nil, //Using nil for stdin to avoid interactive prompts when using test backend
+		stdin,
 		cdc,
 	)
 	if err != nil {
