@@ -10,6 +10,7 @@ replace github.com/bytedance/sonic/loader => github.com/bytedance/sonic/loader v
 
 require (
 	cosmossdk.io/math v1.5.3
+	github.com/AlecAivazis/survey/v2 v2.3.7
 	github.com/LumeraProtocol/lumera v1.6.0
 	github.com/LumeraProtocol/rq-go v0.2.1
 	github.com/btcsuite/btcutil v1.0.3-0.20201208143702-a53e38424cce
@@ -59,7 +60,6 @@ require (
 	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/99designs/go-keychain v0.0.0-20191008050251-8e49817e8af4 // indirect
 	github.com/99designs/keyring v1.2.2 // indirect
-	github.com/AlecAivazis/survey/v2 v2.3.7 // indirect
 	github.com/DataDog/datadog-go v3.2.0+incompatible // indirect
 	github.com/DataDog/zstd v1.5.5 // indirect
 	github.com/benbjohnson/clock v1.3.0 // indirect

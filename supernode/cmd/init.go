@@ -169,7 +169,17 @@ func setupBaseDirectory() error {
 func gatherUserInputs() (InitInputs, error) {
 	// Check if all required parameters are provided via flags
 	allFlagsProvided := keyNameFlag != "" &&
-		(supernodeAddrFlag != "" || supernodePortFlag != 0 || lumeraGrpcFlag != "" || chainIDFlag != "")
+		(supernodeAddrFlag != "" && supernodePortFlag != 0 && lumeraGrpcFlag != "" && chainIDFlag != "") &&
+		(!shouldRecoverFlag && mnemonicFlag == "" || shouldRecoverFlag && mnemonicFlag != "") &&
+		keyringBackendFlag != ""
+
+	if skipInteractive && shouldRecoverFlag && mnemonicFlag == "" {
+		return InitInputs{}, fmt.Errorf("--mnemonic flag is required when --recover flag is set for non-interactive mode")
+	}
+
+	if !shouldRecoverFlag && mnemonicFlag != "" {
+		return InitInputs{}, fmt.Errorf("--mnemonic flag should not be set when not recovering a key")
+	}
 
 	// If -y flag is set or all flags are provided, use flags or defaults
 	if skipInteractive || allFlagsProvided {
@@ -227,17 +237,18 @@ func gatherUserInputs() (InitInputs, error) {
 	var err error
 
 	// Interactive setup
-	inputs.KeyringBackend, err = promptKeyringBackend()
+	inputs.KeyringBackend, err = promptKeyringBackend(keyringBackendFlag)
 	if err != nil {
 		return InitInputs{}, fmt.Errorf("failed to select keyring backend: %w", err)
 	}
 
-	inputs.KeyName, inputs.ShouldRecover, inputs.Mnemonic, err = promptKeyManagement()
+	inputs.KeyName, inputs.ShouldRecover, inputs.Mnemonic, err = promptKeyManagement(keyNameFlag, shouldRecoverFlag, mnemonicFlag)
 	if err != nil {
 		return InitInputs{}, fmt.Errorf("failed to configure key management: %w", err)
 	}
 
-	inputs.SupernodeAddr, inputs.SupernodePort, inputs.LumeraGRPC, inputs.ChainID, err = promptNetworkConfig()
+	inputs.SupernodeAddr, inputs.SupernodePort, inputs.LumeraGRPC, inputs.ChainID, err =
+		promptNetworkConfig(supernodeAddrFlag, supernodePortFlag, lumeraGrpcFlag, chainIDFlag)
 	if err != nil {
 		return InitInputs{}, fmt.Errorf("failed to configure network settings: %w", err)
 	}
@@ -372,45 +383,55 @@ func printSuccessMessage(mnemonic string) {
 }
 
 // Interactive prompt functions
-func promptKeyringBackend() (string, error) {
+func promptKeyringBackend(passedBackend string) (string, error) {
 	var backend string
+	if passedBackend != "" {
+		backend = passedBackend
+	} else {
+		backend = DefaultKeyringBackend
+	}
 	prompt := &survey.Select{
 		Message: "Choose keyring backend:",
 		Options: []string{"os", "file", "test"},
-		Default: "os",
+		Default: backend,
 		Help:    "os: OS keyring (most secure), file: encrypted file, test: unencrypted (dev only), Ctrl-C for exit",
 	}
 	return backend, survey.AskOne(prompt, &backend)
 }
 
-func promptKeyManagement() (keyName string, shouldRecover bool, mnemonic string, err error) {
+func promptKeyManagement(passedKeyName string, recover bool, passedMnemonic string) (keyName string, shouldRecover bool, mnemonic string, err error) {
 	// Key name input with validation
 	keyNamePrompt := &survey.Input{
 		Message: "Enter key name:",
 		Help:    "Alphanumeric characters and underscores only, Ctrl-C for exit",
+		Default: passedKeyName,
 	}
 	err = survey.AskOne(keyNamePrompt, &keyName, survey.WithValidator(survey.Required))
 	if err != nil {
 		return "", false, "", err
 	}
 
-	// Ask whether to create a new address or recover from mnemonic
-	createOrRecoverPrompt := &survey.Select{
-		Message: "Would you like to create a new address or recover from mnemonic?",
-		Options: []string{"Create new address", "Recover from mnemonic"},
-		Default: "Create new address",
-		Help:    "Create a new address or recover an existing one from mnemonic, Ctrl-C for exit",
-	}
-	var createOrRecover string
-	err = survey.AskOne(createOrRecoverPrompt, &createOrRecover)
-	if err != nil {
-		return "", false, "", err
-	}
+	shouldRecover = recover
+	if !recover {
+		// Ask whether to create a new address or recover from mnemonic
+		createOrRecoverPrompt := &survey.Select{
+			Message: "Would you like to create a new address or recover from mnemonic?",
+			Options: []string{"Create new address", "Recover from mnemonic"},
+			Default: "Create new address",
+			Help:    "Create a new address or recover an existing one from mnemonic, Ctrl-C for exit",
+		}
+		var createOrRecover string
+		err = survey.AskOne(createOrRecoverPrompt, &createOrRecover)
+		if err != nil {
+			return "", false, "", err
+		}
 
-	shouldRecover = createOrRecover == "Recover from mnemonic"
+		shouldRecover = createOrRecover == "Recover from mnemonic"
+	}
 
 	// If recovering, ask for mnemonic
-	if shouldRecover {
+	mnemonic = passedMnemonic
+	if shouldRecover && passedMnemonic == "" {
 		mnemonicPrompt := &survey.Password{
 			Message: "Enter your mnemonic phrase:",
 			Help:    "Space-separated words (typically 12 or 24 words), Ctrl-C for exit",
@@ -424,11 +445,33 @@ func promptKeyManagement() (keyName string, shouldRecover bool, mnemonic string,
 	return keyName, shouldRecover, mnemonic, nil
 }
 
-func promptNetworkConfig() (supernodeAddr string, supernodePort int, lumeraGrpcAddr string, chainID string, err error) {
+func promptNetworkConfig(passedAddrs string, passedPort int, passedGRPC, passedChainID string) (supernodeAddr string, supernodePort int, lumeraGrpcAddr string, chainID string, err error) {
+	if passedAddrs != "" {
+		supernodeAddr = passedAddrs
+	} else {
+		supernodeAddr = DefaultSupernodeAddr
+	}
+	var port string
+	if passedPort != 0 {
+		port = fmt.Sprintf("%d", passedPort)
+	} else {
+		port = fmt.Sprintf("%d", DefaultSupernodePort)
+	}
+	if passedGRPC != "" {
+		lumeraGrpcAddr = passedGRPC
+	} else {
+		lumeraGrpcAddr = DefaultLumeraGRPC
+	}
+	if passedChainID != "" {
+		chainID = passedChainID
+	} else {
+		chainID = DefaultChainID
+	}
+
 	// Supernode IP address
 	supernodePrompt := &survey.Input{
 		Message: "Enter supernode IP address:",
-		Default: DefaultSupernodeAddr,
+		Default: supernodeAddr,
 		Help:    "IP address for the supernode to listen on, Ctrl-C for exit",
 	}
 	err = survey.AskOne(supernodePrompt, &supernodeAddr)
@@ -440,7 +483,7 @@ func promptNetworkConfig() (supernodeAddr string, supernodePort int, lumeraGrpcA
 	var portStr string
 	supernodePortPrompt := &survey.Input{
 		Message: "Enter supernode port:",
-		Default: fmt.Sprintf("%d", DefaultSupernodePort),
+		Default: port,
 		Help:    "Port for the supernode to listen on (1-65535), Ctrl-C for exit",
 	}
 	err = survey.AskOne(supernodePortPrompt, &portStr)
@@ -456,7 +499,7 @@ func promptNetworkConfig() (supernodeAddr string, supernodePort int, lumeraGrpcA
 	// Lumera GRPC address (full address with port)
 	lumeraPrompt := &survey.Input{
 		Message: "Enter Lumera GRPC address:",
-		Default: DefaultLumeraGRPC,
+		Default: lumeraGrpcAddr,
 		Help:    "GRPC address of the Lumera node (host:port), Ctrl-C for exit",
 	}
 	err = survey.AskOne(lumeraPrompt, &lumeraGrpcAddr)
@@ -467,7 +510,7 @@ func promptNetworkConfig() (supernodeAddr string, supernodePort int, lumeraGrpcA
 	// Chain ID
 	chainPrompt := &survey.Input{
 		Message: "Enter chain ID:",
-		Default: DefaultChainID,
+		Default: chainID,
 		Help:    "Chain ID of the Lumera network, Ctrl-C for exit",
 	}
 	err = survey.AskOne(chainPrompt, &chainID, survey.WithValidator(survey.Required))
