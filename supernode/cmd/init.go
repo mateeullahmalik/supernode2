@@ -2,10 +2,14 @@ package cmd
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/AlecAivazis/survey/v2"
@@ -31,7 +35,7 @@ var (
 
 // Default configuration values
 const (
-	DefaultKeyringBackend = "test"
+	DefaultKeyringBackend = "os"
 	DefaultKeyName        = ""
 	DefaultSupernodeAddr  = "0.0.0.0"
 	DefaultSupernodePort  = 4444
@@ -191,24 +195,49 @@ func gatherUserInputs() (InitInputs, error) {
 			backend = keyringBackendFlag
 		}
 
+		// Validate keyring backend
+		if err := validateKeyringBackend(backend); err != nil {
+			return InitInputs{}, err
+		}
+
 		keyName := DefaultKeyName
 		if keyNameFlag != "" {
 			keyName = keyNameFlag
+
+			// Validate key name only if provided (default empty string is allowed)
+			if err := validateKeyName(keyName); err != nil {
+				return InitInputs{}, err
+			}
 		}
 
 		supernodeAddr := DefaultSupernodeAddr
 		if supernodeAddrFlag != "" {
 			supernodeAddr = supernodeAddrFlag
+
+			// Validate supernode IP address
+			if err := validateIPAddress(supernodeAddr); err != nil {
+				return InitInputs{}, err
+			}
 		}
 
 		supernodePort := DefaultSupernodePort
 		if supernodePortFlag != 0 {
 			supernodePort = supernodePortFlag
+
+			// Port validation is handled by the flag type (int)
+			if supernodePort < 1 || supernodePort > 65535 {
+				return InitInputs{}, fmt.Errorf("invalid supernode port: %d, must be between 1 and 65535", supernodePort)
+			}
 		}
 
 		lumeraGRPC := DefaultLumeraGRPC
 		if lumeraGrpcFlag != "" {
 			lumeraGRPC = lumeraGrpcFlag
+
+			// Validate GRPC address
+			if err := validateGRPCAddress(lumeraGRPC); err != nil {
+				return InitInputs{}, err
+			}
 		}
 
 		chainID := DefaultChainID
@@ -386,6 +415,9 @@ func printSuccessMessage(mnemonic string) {
 func promptKeyringBackend(passedBackend string) (string, error) {
 	var backend string
 	if passedBackend != "" {
+		if passedBackend != "os" && passedBackend != "file" && passedBackend != "test" {
+			return "", fmt.Errorf("invalid keyring backend: %s, must be one of 'os', 'file', or 'test'", passedBackend)
+		}
 		backend = passedBackend
 	} else {
 		backend = DefaultKeyringBackend
@@ -409,6 +441,13 @@ func promptKeyManagement(passedKeyName string, recover bool, passedMnemonic stri
 	err = survey.AskOne(keyNamePrompt, &keyName, survey.WithValidator(survey.Required))
 	if err != nil {
 		return "", false, "", err
+	}
+
+	// Validate key name format if provided
+	if keyName != "" {
+		if err := validateKeyName(keyName); err != nil {
+			return "", false, "", err
+		}
 	}
 
 	shouldRecover = recover
@@ -479,6 +518,11 @@ func promptNetworkConfig(passedAddrs string, passedPort int, passedGRPC, passedC
 		return "", 0, "", "", err
 	}
 
+	// Validate IP address format
+	if err := validateIPAddress(supernodeAddr); err != nil {
+		return "", 0, "", "", err
+	}
+
 	// Supernode port
 	var portStr string
 	supernodePortPrompt := &survey.Input{
@@ -507,6 +551,11 @@ func promptNetworkConfig(passedAddrs string, passedPort int, passedGRPC, passedC
 		return "", 0, "", "", err
 	}
 
+	// Validate GRPC address format
+	if err := validateGRPCAddress(lumeraGrpcAddr); err != nil {
+		return "", 0, "", "", err
+	}
+
 	// Chain ID
 	chainPrompt := &survey.Input{
 		Message: "Enter chain ID:",
@@ -519,6 +568,97 @@ func promptNetworkConfig(passedAddrs string, passedPort int, passedGRPC, passedC
 	}
 
 	return supernodeAddr, supernodePort, lumeraGrpcAddr, chainID, nil
+}
+
+// validateKeyringBackend checks if the provided keyring backend is valid
+func validateKeyringBackend(backend string) error {
+	if backend != "os" && backend != "file" && backend != "test" {
+		return fmt.Errorf("invalid keyring backend: %s, must be one of 'os', 'file', or 'test'", backend)
+	}
+	return nil
+}
+
+// validateKeyName checks if the provided key name contains only alphanumeric characters and underscores
+func validateKeyName(keyName string) error {
+	if keyName == "" {
+		return fmt.Errorf("key name cannot be empty")
+	}
+
+	matched, err := regexp.MatchString("^[a-zA-Z0-9_]+$", keyName)
+	if err != nil {
+		return fmt.Errorf("error validating key name: %w", err)
+	}
+
+	if !matched {
+		return fmt.Errorf("invalid key name: %s, must contain only alphanumeric characters and underscores", keyName)
+	}
+
+	return nil
+}
+
+// validateIPAddress checks if the provided string is a valid IP address
+func validateIPAddress(ipAddress string) error {
+	if ipAddress == "" {
+		return fmt.Errorf("IP address cannot be empty")
+	}
+
+	ip := net.ParseIP(ipAddress)
+	if ip == nil {
+		return fmt.Errorf("invalid IP address format: %s", ipAddress)
+	}
+
+	return nil
+}
+
+// validateGRPCAddress checks if the provided string follows valid GRPC address formats:
+// - host:port
+// - schema://hostname-or-ip
+// - schema://hostname-or-ip:port
+func validateGRPCAddress(grpcAddress string) error {
+	if grpcAddress == "" {
+		return fmt.Errorf("GRPC address cannot be empty")
+	}
+
+	// Check if the address has a schema (starts with schema://)
+	if strings.Contains(grpcAddress, "://") {
+		// Parse as URL
+		parsedURL, err := url.Parse(grpcAddress)
+		if err != nil {
+			return fmt.Errorf("invalid GRPC address format: %s, error: %v", grpcAddress, err)
+		}
+
+		// Validate host part
+		if parsedURL.Host == "" {
+			return fmt.Errorf("host part of GRPC address cannot be empty")
+		}
+
+		// If port is specified, validate it
+		if parsedURL.Port() != "" {
+			portNum, err := strconv.Atoi(parsedURL.Port())
+			if err != nil || portNum < 1 || portNum > 65535 {
+				return fmt.Errorf("invalid port in GRPC address: %s, must be a number between 1 and 65535", parsedURL.Port())
+			}
+		}
+	} else {
+		// No schema, should be in host:port format
+		host, port, err := net.SplitHostPort(grpcAddress)
+		if err != nil {
+			return fmt.Errorf("invalid GRPC address format: %s, must be in host:port format or schema://host[:port] format", grpcAddress)
+		}
+
+		// Validate host part
+		if host == "" {
+			return fmt.Errorf("host part of GRPC address cannot be empty")
+		}
+
+		// Validate port part
+		portNum, err := strconv.Atoi(port)
+		if err != nil || portNum < 1 || portNum > 65535 {
+			return fmt.Errorf("invalid port in GRPC address: %s, must be a number between 1 and 65535", port)
+		}
+	}
+
+	return nil
 }
 
 func init() {
