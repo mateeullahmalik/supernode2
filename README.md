@@ -10,33 +10,49 @@ The supernode exposes two main gRPC services:
 
 Provides system status and monitoring information.
 
-**Service Definition:**
 ```protobuf
 service SupernodeService {
   rpc GetStatus(StatusRequest) returns (StatusResponse);
 }
-```
 
-**StatusResponse includes:**
-- `CPU` - CPU usage and remaining capacity
-- `Memory` - Total, used, available memory and usage percentage  
-- `ServiceTasks` - Task information for each active service
-- `available_services` - List of available service names
+message StatusRequest {}
+
+message StatusResponse {
+  message CPU {
+    string usage = 1;
+    string remaining = 2;
+  }
+
+  message Memory {
+    uint64 total = 1;
+    uint64 used = 2;
+    uint64 available = 3;
+    double used_perc = 4;
+  }
+
+  message ServiceTasks {
+    string service_name = 1;
+    repeated string task_ids = 2;
+    int32 task_count = 3;
+  }
+
+  CPU cpu = 1;
+  Memory memory = 2;
+  repeated ServiceTasks services = 3;
+  repeated string available_services = 4;
+}
+```
 
 ### CascadeService
 
 Handles cascade operations for data storage and retrieval.
 
-**Service Definition:**
 ```protobuf
 service CascadeService {
   rpc Register (stream RegisterRequest) returns (stream RegisterResponse);
   rpc Download (DownloadRequest) returns (stream DownloadResponse);
 }
-```
 
-**Register Operation:**
-```protobuf
 message RegisterRequest {
   oneof request_type {
     DataChunk chunk = 1;
@@ -58,10 +74,7 @@ message RegisterResponse {
   string message = 2;
   string tx_hash = 3;
 }
-```
 
-**Download Operation:**
-```protobuf
 message DownloadRequest {
   string action_id = 1;
   string signature = 2;
@@ -78,13 +91,23 @@ message DownloadEvent {
   SupernodeEventType event_type = 1;
   string message = 2;
 }
-```
 
-**Event Types:**
-- `ACTION_RETRIEVED`, `ACTION_FEE_VERIFIED`, `TOP_SUPERNODE_CHECK_PASSED`
-- `METADATA_DECODED`, `DATA_HASH_VERIFIED`, `INPUT_ENCODED`
-- `SIGNATURE_VERIFIED`, `RQID_GENERATED`, `RQID_VERIFIED`
-- `ARTEFACTS_STORED`, `ACTION_FINALIZED`, `ARTEFACTS_DOWNLOADED`
+enum SupernodeEventType {
+  UNKNOWN = 0;
+  ACTION_RETRIEVED = 1;
+  ACTION_FEE_VERIFIED = 2;
+  TOP_SUPERNODE_CHECK_PASSED = 3;
+  METADATA_DECODED = 4;
+  DATA_HASH_VERIFIED = 5;
+  INPUT_ENCODED = 6;
+  SIGNATURE_VERIFIED = 7;
+  RQID_GENERATED = 8;
+  RQID_VERIFIED = 9;
+  ARTEFACTS_STORED = 10;
+  ACTION_FINALIZED = 11;
+  ARTEFACTS_DOWNLOADED = 12;
+}
+```
 
 ## CLI Commands
 
@@ -97,14 +120,23 @@ Initialize a new supernode with interactive setup.
 supernode init                    # Interactive setup
 supernode init --force           # Override existing installation  
 supernode init -y                # Use defaults, skip prompts
-supernode init --keyring-backend test  # Specify keyring backend with -y
+supernode init --keyring-backend os --key-name mykey  # Specify keyring and key
+supernode init --recover --mnemonic "word1 word2..."  # Recover from mnemonic
+supernode init --supernode-addr 0.0.0.0 --supernode-port 4444  # Set network
+supernode init --lumera-grpc localhost:9090 --chain-id lumera-mainnet-1  # Set chain
 ```
 
-**Features:**
-- Creates `~/.supernode/config.yml`
-- Sets up keyring (test, file, or os backend)
-- Key recovery from mnemonic or generates new key
-- Network configuration (gRPC address, ports, chain ID)
+**Available flags:**
+- `--force` - Override existing installation
+- `-y`, `--yes` - Skip interactive prompts, use defaults
+- `--keyring-backend` - Keyring backend (`os`, `file`, `test`)
+- `--key-name` - Name of key to create or recover
+- `--recover` - Recover existing key from mnemonic
+- `--mnemonic` - Mnemonic phrase for recovery (use with --recover)
+- `--supernode-addr` - IP address for supernode service
+- `--supernode-port` - Port for supernode service
+- `--lumera-grpc` - Lumera gRPC address (host:port)
+- `--chain-id` - Lumera blockchain chain ID
 
 #### `supernode start`
 Start the supernode service.
@@ -113,12 +145,6 @@ Start the supernode service.
 supernode start                   # Use default config directory
 supernode start -d /path/to/dir   # Use custom base directory
 ```
-
-**Initializes:**
-- P2P networking service
-- gRPC server (default port 4444)
-- Cascade service for data operations
-- Connection to Lumera validator node
 
 #### `supernode version`
 Display version information.
@@ -136,19 +162,13 @@ List all keys in the keyring with addresses.
 supernode keys list
 ```
 
-**Output format:**
-```
-NAME               ADDRESS
-----               -------
-mykey (selected)   lumera15t2e8gjgmuqtj4jzjqfkf3tf5l8vqw69hmrzmr
-backup             lumera1abc...xyz
-```
-
-#### `supernode keys add <name>`
-Create a new key (generates mnemonic).
-
-#### `supernode keys recover <name>`
+#### `supernode keys recover [name]`
 Recover key from existing mnemonic phrase.
+
+```bash
+supernode keys recover mykey
+supernode keys recover mykey --mnemonic "word1 word2..."
+```
 
 ### Configuration Management
 
@@ -159,22 +179,12 @@ Display current configuration parameters.
 supernode config list
 ```
 
-**Shows:**
-- Key Name, Address, Supernode Address/Port
-- Keyring Backend, Lumera gRPC Address, Chain ID
-
 #### `supernode config update`
 Interactive configuration parameter updates.
 
 ```bash
 supernode config update
 ```
-
-**Updatable parameters:**
-- Supernode IP Address and Port
-- Lumera gRPC Address and Chain ID  
-- Key Name (with key selection from keyring)
-- Keyring Backend (with key migration)
 
 ### Global Flags
 
@@ -186,19 +196,48 @@ supernode start -d /custom/path
 supernode config list -d /custom/path
 ```
 
-## Configuration Parameters
+## Configuration
 
-| Parameter | Description | Required | Default | Example | Notes |
-|-----------|-------------|----------|---------|---------|--------|
-| `supernode.key_name` | Name of the key for signing transactions | **Yes** | - | `"mykey"` | Must match the name used with `supernode keys add` |
-| `supernode.identity` | Lumera address for this supernode | **Yes** | - | `"lumera15t2e8gjgmuqtj4jzjqfkf3tf5l8vqw69hmrzmr"` | Obtained after creating/recovering a key |
-| `supernode.ip_address` | IP address to bind the supernode service | **Yes** | - | `"0.0.0.0"` | Use `"0.0.0.0"` to listen on all interfaces |
-| `supernode.port` | Port for the supernode service | **Yes** | - | `4444` | Choose an available port |
-| `keyring.backend` | Key storage backend type | **Yes** | - | `"test"` | `"test"` for development, `"file"` for encrypted storage, `"os"` for OS keyring |
-| `keyring.dir` | Directory to store keyring files | No | `"keys"` | `"keys"` | Relative paths are appended to basedir, absolute paths used as-is |
-| `p2p.listen_address` | IP address for P2P networking | **Yes** | - | `"0.0.0.0"` | Use `"0.0.0.0"` to listen on all interfaces |
-| `p2p.port` | P2P communication port | **Yes** | - | `4445` | **Do not change this default value** |
-| `p2p.data_dir` | Directory for P2P data storage | No | `"data/p2p"` | `"data/p2p"` | Relative paths are appended to basedir, absolute paths used as-is |
-| `lumera.grpc_addr` | gRPC endpoint of Lumera validator node | **Yes** | - | `"localhost:9090"` | Must be accessible from supernode |
-| `lumera.chain_id` | Lumera blockchain chain identifier | **Yes** | - | `"lumera"` | Must match the actual chain ID |
-| `raptorq.files_dir` | Directory to store RaptorQ files | No | `"raptorq_files"` | `"raptorq_files"` | Relative paths are appended to basedir, absolute paths used as-is |
+The configuration file is located at `~/.supernode/config.yml` and contains the following sections:
+
+### Supernode Configuration
+```yaml
+supernode:
+  key_name: "mykey"                    # Name of the key for signing transactions
+  identity: "lumera15t2e8gjgmuqtj..."  # Lumera address for this supernode  
+  ip_address: "0.0.0.0"               # IP address to bind the service
+  port: 4444                          # Port for the supernode service
+```
+
+### Keyring Configuration
+```yaml
+keyring:
+  backend: "os"      # Key storage backend (os, file, test)
+  dir: "keys"        # Directory to store keyring files (relative to basedir)
+```
+
+### P2P Configuration
+```yaml
+p2p:
+  listen_address: "0.0.0.0"  # IP address for P2P networking
+  port: 4445                 # P2P communication port (do not change)
+  data_dir: "data/p2p"       # Directory for P2P data storage
+```
+
+### Lumera Network Configuration
+```yaml
+lumera:
+  grpc_addr: "localhost:9090"    # gRPC endpoint of Lumera validator node
+  chain_id: "lumera-mainnet-1"   # Lumera blockchain chain identifier
+```
+
+### RaptorQ Configuration
+```yaml
+raptorq:
+  files_dir: "raptorq_files"     # Directory to store RaptorQ files
+```
+
+**Notes:**
+- Relative paths are resolved relative to the base directory (`~/.supernode` by default)
+- Absolute paths are used as-is
+- The P2P port should not be changed from the default value
