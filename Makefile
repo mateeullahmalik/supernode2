@@ -1,4 +1,7 @@
-make .PHONY: test-unit test-integration test-system install-lumera setup-supernodes system-test-setup build build-release
+.PHONY: build build-release build-sncli
+.PHONY: install-lumera setup-supernodes system-test-setup 
+.PHONY: gen-cascade gen-supernode
+.PHONY: test-e2e test-unit test-integration test-system
 
 # Build variables
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -21,6 +24,23 @@ build:
 		-o release/supernode-linux-amd64 \
 		./supernode
 	@chmod +x release/supernode-linux-amd64
+
+build-sncli: build/sncli
+
+build/sncli: $(SNCLI_SRC) go.mod go.sum
+	@mkdir -p release
+	@echo "Building sncli..."
+	@RELEASE_DIR=$(CURDIR)/release && \
+	cd tests/client && \
+	CGO_ENABLED=1 \
+	GOOS=linux \
+	GOARCH=amd64 \
+	go build \
+		-trimpath \
+		-ldflags="-s -w $(LDFLAGS)" \
+		-o $$RELEASE_DIR/sncli
+
+SNCLI_SRC=$(shell find tests/client -name "*.go")
 
 test-unit:
 	go test -v ./...
