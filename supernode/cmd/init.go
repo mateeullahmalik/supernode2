@@ -32,6 +32,9 @@ var (
 	gatewayPortFlag    int
 	lumeraGrpcFlag     string
 	chainIDFlag        string
+	passphrasePlain    string
+	passphraseEnv      string
+	passphraseFile     string
 )
 
 // Default configuration values
@@ -47,15 +50,18 @@ const (
 
 // InitInputs holds all user inputs for initialization
 type InitInputs struct {
-	KeyringBackend string
-	KeyName        string
-	ShouldRecover  bool
-	Mnemonic       string
-	SupernodeAddr  string
-	SupernodePort  int
-	GatewayPort    int
-	LumeraGRPC     string
-	ChainID        string
+	KeyringBackend  string
+	PassphrasePlain string
+	PassphraseEnv   string
+	PassphraseFile  string
+	KeyName         string
+	ShouldRecover   bool
+	Mnemonic        string
+	SupernodeAddr   string
+	SupernodePort   int
+	GatewayPort     int
+	LumeraGRPC      string
+	ChainID         string
 }
 
 // initCmd represents the init command
@@ -108,7 +114,8 @@ Example:
 		}
 
 		// Create and setup configuration
-		if err := createAndSetupConfig(inputs.KeyName, inputs.ChainID, inputs.KeyringBackend); err != nil {
+		if err := createAndSetupConfig(inputs.KeyName, inputs.ChainID, inputs.KeyringBackend,
+			inputs.PassphrasePlain, inputs.PassphraseEnv, inputs.PassphraseFile); err != nil {
 			return err
 		}
 
@@ -172,8 +179,26 @@ func setupBaseDirectory() error {
 	return nil
 }
 
+func passphraseFlagCount() int {
+	c := 0
+	if passphrasePlain != "" {
+		c++
+	}
+	if passphraseEnv != "" {
+		c++
+	}
+	if passphraseFile != "" {
+		c++
+	}
+	return c
+}
+
 // gatherUserInputs collects all user inputs through interactive prompts or uses defaults/flags
 func gatherUserInputs() (InitInputs, error) {
+	if count := passphraseFlagCount(); count > 1 {
+		return InitInputs{}, fmt.Errorf("specify only one of --keyring-passphrase, --keyring-passphrase-env, or --keyring-passphrase-file")
+	}
+
 	// Check if all required parameters are provided via flags
 	allFlagsProvided := keyNameFlag != "" &&
 		(supernodeAddrFlag != "" && supernodePortFlag != 0 && lumeraGrpcFlag != "" && chainIDFlag != "") &&
@@ -264,15 +289,18 @@ func gatherUserInputs() (InitInputs, error) {
 		}
 
 		return InitInputs{
-			KeyringBackend: backend,
-			KeyName:        keyName,
-			ShouldRecover:  shouldRecoverFlag,
-			Mnemonic:       mnemonicFlag,
-			SupernodeAddr:  supernodeAddr,
-			SupernodePort:  supernodePort,
-			GatewayPort:    gatewayPort,
-			LumeraGRPC:     lumeraGRPC,
-			ChainID:        chainID,
+			KeyringBackend:  backend,
+			PassphrasePlain: passphrasePlain,
+			PassphraseEnv:   passphraseEnv,
+			PassphraseFile:  passphraseFile,
+			KeyName:         keyName,
+			ShouldRecover:   shouldRecoverFlag,
+			Mnemonic:        mnemonicFlag,
+			SupernodeAddr:   supernodeAddr,
+			SupernodePort:   supernodePort,
+			GatewayPort:     gatewayPort,
+			LumeraGRPC:      lumeraGRPC,
+			ChainID:         chainID,
 		}, nil
 	}
 
@@ -283,6 +311,32 @@ func gatherUserInputs() (InitInputs, error) {
 	inputs.KeyringBackend, err = promptKeyringBackend(keyringBackendFlag)
 	if err != nil {
 		return InitInputs{}, fmt.Errorf("failed to select keyring backend: %w", err)
+	}
+
+	backend := strings.ToLower(inputs.KeyringBackend)
+	switch backend {
+	case "file", "os":
+		switch passphraseFlagCount() {
+		case 0:
+			prompt := &survey.Password{
+				Message: "Enter keyring passphrase:",
+				Help:    "Required for 'file' or 'os' keyring back-ends – Ctrl-C to abort.",
+			}
+			if err = survey.AskOne(prompt, &inputs.PassphrasePlain, survey.WithValidator(survey.Required)); err != nil {
+				return InitInputs{}, fmt.Errorf("failed to get keyring passphrase: %w", err)
+			}
+		case 1:
+			inputs.PassphrasePlain = passphrasePlain
+			inputs.PassphraseEnv = passphraseEnv
+			inputs.PassphraseFile = passphraseFile
+		default:
+			return InitInputs{}, fmt.Errorf("specify only one of --keyring-passphrase, --keyring-passphrase-env, or --keyring-passphrase-file")
+		}
+
+	default:
+		inputs.PassphrasePlain = passphrasePlain
+		inputs.PassphraseEnv = passphraseEnv
+		inputs.PassphraseFile = passphraseFile
 	}
 
 	inputs.KeyName, inputs.ShouldRecover, inputs.Mnemonic, err = promptKeyManagement(keyNameFlag, shouldRecoverFlag, mnemonicFlag)
@@ -300,14 +354,14 @@ func gatherUserInputs() (InitInputs, error) {
 }
 
 // createAndSetupConfig creates default configuration and necessary directories
-func createAndSetupConfig(keyName, chainID, keyringBackend string) error {
+func createAndSetupConfig(keyName, chainID, keyringBackend, passPlain, passEnv, passFile string) error {
 	// Set config file path
 	cfgFile := filepath.Join(baseDir, DefaultConfigFile)
 
 	fmt.Printf("Using config file: %s\n", cfgFile)
 
 	// Create default configuration
-	appConfig = config.CreateDefaultConfig(keyName, "", chainID, keyringBackend, "")
+	appConfig = config.CreateDefaultConfig(keyName, "", chainID, keyringBackend, "", passPlain, passEnv, passFile)
 	appConfig.BaseDir = baseDir
 
 	// Create directories
@@ -511,7 +565,7 @@ func promptNetworkConfig(passedAddrs string, passedPort int, passedGatewayPort i
 	} else {
 		port = fmt.Sprintf("%d", DefaultSupernodePort)
 	}
-	
+
 	var gPort string
 	if passedGatewayPort != 0 {
 		gPort = fmt.Sprintf("%d", passedGatewayPort)
@@ -561,7 +615,7 @@ func promptNetworkConfig(passedAddrs string, passedPort int, passedGatewayPort i
 	if err != nil || supernodePort < 1 || supernodePort > 65535 {
 		return "", 0, 0, "", "", fmt.Errorf("invalid supernode port: %s", portStr)
 	}
-	
+
 	// Gateway port
 	var gatewayPortStr string
 	gatewayPortPrompt := &survey.Input{
@@ -573,7 +627,7 @@ func promptNetworkConfig(passedAddrs string, passedPort int, passedGatewayPort i
 	if err != nil {
 		return "", 0, 0, "", "", err
 	}
-	
+
 	gatewayPort, err = strconv.Atoi(gatewayPortStr)
 	if err != nil || gatewayPort < 1 || gatewayPort > 65535 {
 		return "", 0, 0, "", "", fmt.Errorf("invalid gateway port: %s", gatewayPortStr)
@@ -715,4 +769,7 @@ func init() {
 	initCmd.Flags().IntVar(&gatewayPortFlag, "gateway-port", 0, "Port for the HTTP gateway to listen on")
 	initCmd.Flags().StringVar(&lumeraGrpcFlag, "lumera-grpc", "", "GRPC address of the Lumera node (host:port)")
 	initCmd.Flags().StringVar(&chainIDFlag, "chain-id", "", "Chain ID of the Lumera network")
+	initCmd.Flags().StringVar(&passphrasePlain, "keyring-passphrase", "", "Keyring passphrase for non-interactive mode")
+	initCmd.Flags().StringVar(&passphraseEnv, "keyring-passphrase-env", "", "Environment variable containing keyring passphrase")
+	initCmd.Flags().StringVar(&passphraseFile, "keyring-passphrase-file", "", "File containing keyring passphrase")
 }
