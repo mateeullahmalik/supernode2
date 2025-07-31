@@ -13,13 +13,41 @@ import (
 type SupernodeServer struct {
 	pb.UnimplementedSupernodeServiceServer
 	statusService *supernode.SupernodeStatusService
+	services      []ServiceInfo // Store service descriptors
+}
+
+// ServiceInfo holds information about a registered service
+type ServiceInfo struct {
+	Name    string
+	Methods []string
 }
 
 // NewSupernodeServer creates a new SupernodeServer
 func NewSupernodeServer(statusService *supernode.SupernodeStatusService) *SupernodeServer {
 	return &SupernodeServer{
 		statusService: statusService,
+		services:      []ServiceInfo{},
 	}
+}
+
+// RegisterService adds a service to the known services list
+func (s *SupernodeServer) RegisterService(serviceName string, desc *grpc.ServiceDesc) {
+	methods := make([]string, 0, len(desc.Methods)+len(desc.Streams))
+	
+	// Add unary methods
+	for _, method := range desc.Methods {
+		methods = append(methods, method.MethodName)
+	}
+	
+	// Add streaming methods
+	for _, stream := range desc.Streams {
+		methods = append(methods, stream.StreamName)
+	}
+	
+	s.services = append(s.services, ServiceInfo{
+		Name:    serviceName,
+		Methods: methods,
+	})
 }
 
 // GetStatus implements SupernodeService.GetStatus
@@ -42,21 +70,38 @@ func (s *SupernodeServer) GetStatus(ctx context.Context, req *pb.StatusRequest) 
 			Available: status.Memory.Available,
 			UsedPerc:  status.Memory.UsedPerc,
 		},
-		Services:          make([]*pb.StatusResponse_ServiceTasks, 0, len(status.Services)),
-		AvailableServices: status.AvailableServices,
+		RunningTasks:       make([]*pb.StatusResponse_ServiceTasks, 0, len(status.RunningTasks)),
+		RegisteredServices: status.RegisteredServices,
 	}
 
 	// Convert service tasks
-	for _, service := range status.Services {
+	for _, service := range status.RunningTasks {
 		serviceTask := &pb.StatusResponse_ServiceTasks{
 			ServiceName: service.ServiceName,
 			TaskIds:     service.TaskIDs,
 			TaskCount:   service.TaskCount,
 		}
-		response.Services = append(response.Services, serviceTask)
+		response.RunningTasks = append(response.RunningTasks, serviceTask)
 	}
 
 	return response, nil
+}
+
+// ListServices implements SupernodeService.ListServices
+func (s *SupernodeServer) ListServices(ctx context.Context, req *pb.ListServicesRequest) (*pb.ListServicesResponse, error) {
+	// Convert internal ServiceInfo to protobuf ServiceInfo
+	services := make([]*pb.ServiceInfo, 0, len(s.services))
+	for _, svc := range s.services {
+		services = append(services, &pb.ServiceInfo{
+			Name:    svc.Name,
+			Methods: svc.Methods,
+		})
+	}
+
+	return &pb.ListServicesResponse{
+		Services: services,
+		Count:    int32(len(services)),
+	}, nil
 }
 
 // Desc implements the service interface for gRPC service registration
