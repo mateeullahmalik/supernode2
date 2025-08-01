@@ -1,4 +1,4 @@
-module github.com/LumeraProtocol/supernode/tests/client
+module github.com/LumeraProtocol/supernode/cmd/sncli
 
 go 1.24.1
 
@@ -8,6 +8,7 @@ require (
 	github.com/BurntSushi/toml v1.4.0
 	github.com/LumeraProtocol/supernode v1.6.2
 	github.com/cosmos/cosmos-sdk v0.50.14
+	github.com/spf13/pflag v1.0.7
 	google.golang.org/grpc v1.71.0
 )
 
@@ -131,7 +132,6 @@ require (
 	github.com/spf13/afero v1.11.0 // indirect
 	github.com/spf13/cast v1.7.1 // indirect
 	github.com/spf13/cobra v1.8.1 // indirect
-	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/spf13/viper v1.19.0 // indirect
 	github.com/stretchr/testify v1.10.0 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect

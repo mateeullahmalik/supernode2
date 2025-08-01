@@ -16,7 +16,7 @@ backend = "test"
 # For backend="file", this should be the path where the keyring data is kept
 dir = "~/.lumera"
 
-# Name of the key to use for for signing transactions and identifying this client
+# Name of the key to use for signing transactions and identifying this client
 key_name = "sncli-account"
 
 # Bech32-encoded address of the local account (must match the address of key_name)

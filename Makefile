@@ -18,12 +18,14 @@ build:
 	CGO_ENABLED=1 \
 	GOOS=linux \
 	GOARCH=amd64 \
+	echo "Building supernode..."
 	go build \
 		-trimpath \
 		-ldflags="-s -w $(LDFLAGS)" \
 		-o release/supernode-linux-amd64 \
 		./supernode
 	@chmod +x release/supernode-linux-amd64
+	@echo "supernode built successfully at release/supernode-linux-amd64"
 
 build-sncli: build/sncli
 
@@ -31,16 +33,18 @@ build/sncli: $(SNCLI_SRC) go.mod go.sum
 	@mkdir -p release
 	@echo "Building sncli..."
 	@RELEASE_DIR=$(CURDIR)/release && \
-	cd tests/client && \
+	cd cmd/sncli && \
 	CGO_ENABLED=1 \
 	GOOS=linux \
 	GOARCH=amd64 \
 	go build \
 		-trimpath \
 		-ldflags="-s -w $(LDFLAGS)" \
-		-o $$RELEASE_DIR/sncli
+		-o $$RELEASE_DIR/sncli && \
+	chmod +x $$RELEASE_DIR/sncli && \
+	echo "sncli built successfully at $$RELEASE_DIR/sncli"
 
-SNCLI_SRC=$(shell find tests/client -name "*.go")
+SNCLI_SRC=$(shell find cmd/sncli -name "*.go")
 
 test-unit:
 	go test -v ./...
