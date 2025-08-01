@@ -27,9 +27,9 @@ build:
 	@chmod +x release/supernode-linux-amd64
 	@echo "supernode built successfully at release/supernode-linux-amd64"
 
-build-sncli: build/sncli
+build-sncli: release/sncli
 
-build/sncli: $(SNCLI_SRC) go.mod go.sum
+release/sncli: $(SNCLI_SRC) go.mod go.sum
 	@mkdir -p release
 	@echo "Building sncli..."
 	@RELEASE_DIR=$(CURDIR)/release && \
