@@ -12,12 +12,12 @@ import (
 	"github.com/LumeraProtocol/supernode/p2p/kademlia/store/cloud.go"
 	"github.com/LumeraProtocol/supernode/p2p/kademlia/store/sqlite"
 	"github.com/LumeraProtocol/supernode/pkg/codec"
-	"github.com/LumeraProtocol/supernode/pkg/keyring"
 	"github.com/LumeraProtocol/supernode/pkg/logtrace"
 	"github.com/LumeraProtocol/supernode/pkg/lumera"
 	"github.com/LumeraProtocol/supernode/pkg/storage/rqstore"
 	"github.com/LumeraProtocol/supernode/supernode/config"
 	"github.com/LumeraProtocol/supernode/supernode/node/action/server/cascade"
+	"github.com/LumeraProtocol/supernode/supernode/node/supernode/gateway"
 	"github.com/LumeraProtocol/supernode/supernode/node/supernode/server"
 	cascadeService "github.com/LumeraProtocol/supernode/supernode/services/cascade"
 	"github.com/LumeraProtocol/supernode/supernode/services/common"
@@ -55,35 +55,33 @@ The supernode will connect to the Lumera network and begin participating in the 
 		logtrace.Info(ctx, "Starting supernode with configuration", logtrace.Fields{"config_file": cfgFile, "keyring_dir": appConfig.GetKeyringDir(), "key_name": appConfig.SupernodeConfig.KeyName})
 
 		// Initialize keyring
-		kr, err := keyring.InitKeyring(appConfig.KeyringConfig.Backend, appConfig.GetKeyringDir())
+		kr, err := initKeyringFromConfig(appConfig)
 		if err != nil {
-			logtrace.Error(ctx, "Failed to initialize keyring", logtrace.Fields{"error": err.Error()})
-			return err
+			logtrace.Fatal(ctx, "Failed to initialize keyring", logtrace.Fields{"error": err.Error()})
 		}
 
 		// Initialize Lumera client
 		lumeraClient, err := initLumeraClient(ctx, appConfig, kr)
 		if err != nil {
-			return fmt.Errorf("failed to initialize Lumera client: %w", err)
+			logtrace.Fatal(ctx, "Failed to initialize Lumera client", logtrace.Fields{"error": err.Error()})
 		}
 
 		// Initialize RaptorQ store for Cascade processing
 		rqStore, err := initRQStore(ctx, appConfig)
 		if err != nil {
-			return fmt.Errorf("failed to initialize RaptorQ store: %w", err)
+			logtrace.Fatal(ctx, "Failed to initialize RaptorQ store", logtrace.Fields{"error": err.Error()})
 		}
 
 		// Initialize P2P service
 		p2pService, err := initP2PService(ctx, appConfig, lumeraClient, kr, rqStore, nil, nil)
 		if err != nil {
-			return fmt.Errorf("failed to initialize P2P service: %w", err)
+			logtrace.Fatal(ctx, "Failed to initialize P2P service", logtrace.Fields{"error": err.Error()})
 		}
 
 		// Initialize the supernode
 		supernodeInstance, err := NewSupernode(ctx, appConfig, kr, p2pService, rqStore, lumeraClient)
 		if err != nil {
-			logtrace.Error(ctx, "Failed to initialize supernode", logtrace.Fields{"error": err.Error()})
-			return err
+			logtrace.Fatal(ctx, "Failed to initialize supernode", logtrace.Fields{"error": err.Error()})
 		}
 
 		// Configure cascade service
@@ -106,6 +104,8 @@ The supernode will connect to the Lumera network and begin participating in the 
 		// Create supernode status service
 		statusService := supernodeService.NewSupernodeStatusService()
 		statusService.RegisterTaskProvider(cService)
+
+		// Create supernode server
 		supernodeServer := server.NewSupernodeServer(statusService)
 
 		// Configure server
@@ -118,12 +118,22 @@ The supernode will connect to the Lumera network and begin participating in the 
 		// Create gRPC server
 		grpcServer, err := server.New(serverConfig, "service", kr, lumeraClient, cascadeActionServer, supernodeServer)
 		if err != nil {
-			return fmt.Errorf("failed to create gRPC server: %w", err)
+			logtrace.Fatal(ctx, "Failed to create gRPC server", logtrace.Fields{"error": err.Error()})
+		}
+
+		// Create HTTP gateway server that directly calls the supernode server
+		gatewayPort := appConfig.SupernodeConfig.GatewayPort
+		if gatewayPort == 0 {
+			gatewayPort = 8002 // Default fallback
+		}
+		gatewayServer, err := gateway.NewServer(int(gatewayPort), supernodeServer)
+		if err != nil {
+			return fmt.Errorf("failed to create gateway server: %w", err)
 		}
 
 		// Start the services
 		go func() {
-			if err := RunServices(ctx, grpcServer, cService, *p2pService); err != nil {
+			if err := RunServices(ctx, grpcServer, cService, *p2pService, gatewayServer); err != nil {
 				logtrace.Error(ctx, "Service error", logtrace.Fields{"error": err.Error()})
 			}
 		}()

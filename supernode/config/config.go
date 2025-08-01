@@ -11,15 +11,19 @@ import (
 )
 
 type SupernodeConfig struct {
-	KeyName   string `yaml:"key_name"`
-	Identity  string `yaml:"identity"`
-	IpAddress string `yaml:"ip_address"`
-	Port      uint16 `yaml:"port"`
+	KeyName     string `yaml:"key_name"`
+	Identity    string `yaml:"identity"`
+	IpAddress   string `yaml:"ip_address"`
+	Port        uint16 `yaml:"port"`
+	GatewayPort uint16 `yaml:"gateway_port"`
 }
 
 type KeyringConfig struct {
-	Backend string `yaml:"backend"`
-	Dir     string `yaml:"dir"`
+	Backend   string `yaml:"backend"`
+	Dir       string `yaml:"dir"`
+	PassPlain string `yaml:"passphrase_plain"`
+	PassEnv   string `yaml:"passphrase_env"`
+	PassFile  string `yaml:"passphrase_file"`
 }
 
 type P2PConfig struct {

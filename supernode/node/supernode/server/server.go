@@ -55,8 +55,7 @@ func (server *Server) Run(ctx context.Context) error {
 
 	addresses := strings.Split(server.config.ListenAddresses, ",")
 	if err := server.setupGRPCServer(); err != nil {
-		logtrace.Error(ctx, "Failed to setup gRPC server", logtrace.Fields{logtrace.FieldModule: "server", logtrace.FieldError: err.Error()})
-		return fmt.Errorf("failed to setup gRPC server: %w", err)
+		logtrace.Fatal(ctx, "Failed to setup gRPC server", logtrace.Fields{logtrace.FieldModule: "server", logtrace.FieldError: err.Error()})
 	}
 
 	// Custom server options
@@ -107,9 +106,27 @@ func (server *Server) setupGRPCServer() error {
 	server.healthServer.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 
 	// Register all services
+	var supernodeServer *SupernodeServer
 	for _, service := range server.services {
 		server.grpcServer.RegisterService(service.Desc(), service)
 		server.healthServer.SetServingStatus(service.Desc().ServiceName, healthpb.HealthCheckResponse_SERVING)
+		
+		// Keep reference to SupernodeServer
+		if ss, ok := service.(*SupernodeServer); ok {
+			supernodeServer = ss
+		}
+	}
+	
+	// After all services are registered, update SupernodeServer with the list
+	if supernodeServer != nil {
+		// Register all custom services
+		for _, svc := range server.services {
+			supernodeServer.RegisterService(svc.Desc().ServiceName, svc.Desc())
+		}
+		
+		// Also register the health service
+		healthDesc := healthpb.Health_ServiceDesc
+		supernodeServer.RegisterService(healthDesc.ServiceName, &healthDesc)
 	}
 
 	return nil
