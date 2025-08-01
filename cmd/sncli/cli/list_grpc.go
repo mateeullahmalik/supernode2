@@ -71,7 +71,7 @@ func (c *CLI) listGRPCMethods() error {
 			FileContainingSymbol: c.opts.CommandArgs[0],
 		},
 	}); err != nil {
-		return fmt.Errorf("failed to send list services request: %w", err)
+		return fmt.Errorf("failed to send list services request containing symbol %q: %w", c.opts.CommandArgs[0], err)
 	}
 
 	resp, err := stream.Recv()

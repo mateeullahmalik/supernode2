@@ -11,7 +11,7 @@ func (c *CLI) healthCheck() error {
 
 	resp, err := c.snClient.HealthCheck(context.Background())
 	if err != nil {
-		log.Fatalf("Health check failed: %v", err)
+		log.Fatalf("Supernode health check failed: %v", err)
 	}
 	fmt.Println("✅ Health status:", resp.Status)
 	return nil
