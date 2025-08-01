@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"log"
 )
 
 func (c *CLI) healthCheck() error {
@@ -23,7 +22,7 @@ func (c *CLI) getSupernodeStatus() error {
 
 	resp, err := c.snClient.GetSupernodeStatus(context.Background())
 	if err != nil {
-		log.Fatalf("Get supernode status failed: %v", err)
+		return fmt.Errorf("Get supernode status failed: %v", err)
 	}
 	fmt.Println("Supernode Status:")
 	fmt.Printf("   CPU Usage: %s, Remaining: %s\n", resp.CPU.Usage, resp.CPU.Remaining)
