@@ -2,7 +2,11 @@ module github.com/LumeraProtocol/supernode/cmd/sncli
 
 go 1.24.1
 
-replace github.com/LumeraProtocol/supernode/supernode => ./supernode
+replace (
+	github.com/LumeraProtocol/supernode/supernode => ./supernode
+	github.com/bytedance/sonic => github.com/bytedance/sonic v1.14.0
+	github.com/bytedance/sonic/loader => github.com/bytedance/sonic/loader v0.3.0
+)
 
 require (
 	github.com/BurntSushi/toml v1.4.0
@@ -10,6 +14,7 @@ require (
 	github.com/cosmos/cosmos-sdk v0.50.14
 	github.com/spf13/pflag v1.0.7
 	google.golang.org/grpc v1.71.0
+	google.golang.org/protobuf v1.36.6
 )
 
 require (
@@ -31,7 +36,7 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bgentry/speakeasy v0.1.1-0.20220910012023-760eaf8b6816 // indirect
 	github.com/bytedance/sonic v1.12.3 // indirect
-	github.com/bytedance/sonic/loader v0.2.4 // indirect
+	github.com/bytedance/sonic/loader v0.3.0 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cloudwego/base64x v0.1.5 // indirect
@@ -157,7 +162,6 @@ require (
 	google.golang.org/genproto v0.0.0-20240701130421-f6361c86f094 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20250324211829-b45e905df463 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250324211829-b45e905df463 // indirect
-	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gotest.tools/v3 v3.5.1 // indirect

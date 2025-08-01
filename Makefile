@@ -29,7 +29,7 @@ build:
 
 build-sncli: release/sncli
 
-release/sncli: $(SNCLI_SRC) go.mod go.sum
+release/sncli: $(SNCLI_SRC) cmd/sncli/go.mod cmd/sncli/go.sum
 	@mkdir -p release
 	@echo "Building sncli..."
 	@RELEASE_DIR=$(CURDIR)/release && \
