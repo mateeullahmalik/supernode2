@@ -2,21 +2,22 @@ package cli
 
 import (
 	"context"
+	"github.com/LumeraProtocol/supernode/supernode/config"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
-	
+
 	"github.com/BurntSushi/toml"
 	"github.com/spf13/pflag"
 
-	"github.com/cosmos/cosmos-sdk/crypto/keyring"
+	snkeyring "github.com/LumeraProtocol/supernode/pkg/keyring"
 	"github.com/LumeraProtocol/supernode/pkg/net/credentials/alts/conn"
 	"github.com/LumeraProtocol/supernode/sdk/adapters/lumera"
-	snkeyring "github.com/LumeraProtocol/supernode/pkg/keyring"
 	sdkcfg "github.com/LumeraProtocol/supernode/sdk/config"
 	sdklog "github.com/LumeraProtocol/supernode/sdk/log"
 	sdknet "github.com/LumeraProtocol/supernode/sdk/net"
+	"github.com/cosmos/cosmos-sdk/crypto/keyring"
 )
 
 const (
@@ -24,12 +25,12 @@ const (
 )
 
 type CLI struct {
-	opts CLIOptions
-	cfg  *CLIConfig
-	kr   keyring.Keyring
-	sdkConfig sdkcfg.Config
+	opts         CLIOptions
+	cfg          *CLIConfig
+	kr           keyring.Keyring
+	sdkConfig    sdkcfg.Config
 	lumeraClient lumera.Client
-	snClient sdknet.SupernodeClient
+	snClient     sdknet.SupernodeClient
 }
 
 func (c *CLI) parseCLIOptions() {
@@ -107,13 +108,16 @@ func (c *CLI) Initialize() {
 	c.loadCLIConfig()
 	// Validate configuration & override with CLI options if provided
 	c.validateCLIConfig()
-	
+
 	// Initialize Supernode SDK
 	snkeyring.InitSDKConfig()
 
 	// Initialize keyring
 	var err error
-	c.kr, err = snkeyring.InitKeyring(c.cfg.Keyring.Backend, c.cfg.Keyring.Dir)
+	c.kr, err = snkeyring.InitKeyring(config.KeyringConfig{
+		Backend: c.cfg.Keyring.Backend,
+		Dir:     c.cfg.Keyring.Dir,
+	})
 	if err != nil {
 		log.Fatalf("Keyring init failed: %v", err)
 	}
@@ -149,7 +153,7 @@ func (c *CLI) Finalize() {
 
 	if c.snClient != nil {
 		c.snClient.Close(context.Background())
-	}	
+	}
 }
 
 func (c *CLI) snClientInit() {
