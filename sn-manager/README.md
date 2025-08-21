@@ -54,6 +54,8 @@ journalctl -u sn-manager -f
 sn-manager init
 ```
 
+> !!! If Supernode was already initialized before, use `sn-manager init` without parameters OR with SN-Manager only flags (see bellow)!!!
+
 ### Non-Interactive Mode
 
 **Basic setup:**
