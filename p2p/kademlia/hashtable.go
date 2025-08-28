@@ -97,12 +97,21 @@ func (ht *HashTable) refreshNode(id []byte) {
 	bucket := ht.routeTable[index]
 
 	var offset int
+	found := false
 	// find the position of the node
 	for i, v := range bucket {
-		if bytes.Equal(v.ID, id) {
+		// FIX: Compare hashed IDs since refreshNode is called with HashedID
+		if bytes.Equal(v.HashedID, id) {
 			offset = i
+			found = true
 			break
 		}
+	}
+
+	// Safety check: only rotate if node was actually found
+	if !found {
+		// Node not in bucket, nothing to refresh
+		return
 	}
 
 	// makes the node to the end
