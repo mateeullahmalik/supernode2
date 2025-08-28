@@ -6,11 +6,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"net"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
-	"net"
-	"net/url"
 
 	"github.com/btcsuite/btcutil/base58"
 	"github.com/cenkalti/backoff/v4"
@@ -57,7 +57,7 @@ type DHT struct {
 	cache          storage.KeyValue // store bad bootstrap addresses
 	bsConnected    map[string]bool  // map of connected bootstrap nodes [identity] -> connected
 	supernodeAddr  string           // cached address from chain
-	mtx            sync.Mutex
+	mtx            sync.RWMutex
 	ignorelist     *BanList
 	replicationMtx sync.RWMutex
 	rqstore        rqstore.Store
@@ -182,6 +182,17 @@ func (s *DHT) getSupernodeAddress(ctx context.Context) (string, error) {
 	return supernodeInfo.LatestAddress, nil
 }
 
+// getCachedSupernodeAddress returns cached supernode address without chain queries
+func (s *DHT) getCachedSupernodeAddress() string {
+	s.mtx.RLock()
+	defer s.mtx.RUnlock()
+
+	if s.supernodeAddr != "" {
+		return s.supernodeAddr
+	}
+	return s.ht.self.IP // fallback without chain query
+}
+
 // parseSupernodeAddress extracts the host part from a URL or address string.
 // It handles http/https prefixes, optional ports, and raw host:port formats.
 func parseSupernodeAddress(address string) string {
@@ -208,6 +219,17 @@ func (s *DHT) Start(ctx context.Context) error {
 	// start the network
 	if err := s.network.Start(ctx); err != nil {
 		return fmt.Errorf("start network: %v", err)
+	}
+
+	// Pre-fetch supernode address with generous timeout to avoid chain queries during message creation
+	initCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	if _, err := s.getSupernodeAddress(initCtx); err != nil {
+		logtrace.Warn(ctx, "Failed to pre-fetch supernode address, will use fallback", logtrace.Fields{
+			logtrace.FieldModule: "p2p",
+			logtrace.FieldError:  err.Error(),
+		})
 	}
 
 	go s.StartReplicationWorker(ctx)
@@ -378,8 +400,7 @@ func (s *DHT) Stats(ctx context.Context) (map[string]interface{}, error) {
 
 // newMessage creates a new message
 func (s *DHT) newMessage(messageType int, receiver *Node, data interface{}) *Message {
-	ctx := context.Background()
-	supernodeAddr, _ := s.getSupernodeAddress(ctx)
+	supernodeAddr := s.getCachedSupernodeAddress()
 	hostIP := parseSupernodeAddress(supernodeAddr)
 	sender := &Node{
 		IP:   hostIP,
