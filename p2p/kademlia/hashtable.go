@@ -130,7 +130,7 @@ func (ht *HashTable) randomIDFromBucket(bucket int) []byte {
 	index := bucket / 8
 	var id []byte
 	for i := 0; i < index; i++ {
-		id = append(id, ht.self.ID[i])
+		id = append(id, ht.self.HashedID[i])
 	}
 	start := bucket % 8
 
@@ -139,7 +139,7 @@ func (ht *HashTable) randomIDFromBucket(bucket int) []byte {
 	for i := 0; i < 8; i++ {
 		var bit bool
 		if i < start {
-			bit = hasBit(ht.self.ID[index], uint(i))
+			bit = hasBit(ht.self.HashedID[index], uint(i))
 		} else {
 			nBig, _ := rand.Int(rand.Reader, big.NewInt(2))
 			n := nBig.Int64()
@@ -147,13 +147,13 @@ func (ht *HashTable) randomIDFromBucket(bucket int) []byte {
 			bit = n == 1
 		}
 		if bit {
-			first += byte(math.Pow(2, float64(7-i)))
+			first |= 1 << (7 - i)
 		}
 	}
 	id = append(id, first)
 
 	// randomize each remaining byte
-	for i := index + 1; i < 20; i++ {
+	for i := index + 1; i < B/8; i++ {
 		nBig, _ := rand.Int(rand.Reader, big.NewInt(256))
 		n := nBig.Int64()
 
@@ -171,22 +171,6 @@ func (ht *HashTable) hasBucketNode(bucket int, id []byte) bool {
 	for _, node := range ht.routeTable[bucket] {
 		if bytes.Equal(node.ID, id) {
 			return true
-		}
-	}
-
-	return false
-}
-
-// hasNode check if the node id is exists in the hash table
-func (ht *HashTable) hasNode(id []byte) bool {
-	ht.mutex.RLock()
-	defer ht.mutex.RUnlock()
-
-	for _, bucket := range ht.routeTable {
-		for _, node := range bucket {
-			if bytes.Equal(node.ID, id) {
-				return true
-			}
 		}
 	}
 
@@ -270,13 +254,6 @@ func (ht *HashTable) nodes() []*Node {
 		nodeList = append(nodeList, v...)
 	}
 	return nodeList
-}
-
-// newRandomID returns a new random id
-func newRandomID() ([]byte, error) {
-	id := make([]byte, 20)
-	_, err := rand.Read(id)
-	return id, err
 }
 
 // Simple helper function to determine the value of a particular
