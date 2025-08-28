@@ -199,7 +199,7 @@ func (s *NodeList) NodeIDs() [][]byte {
 
 	toRet := make([][]byte, len(s.Nodes))
 	for i := 0; i < len(s.Nodes); i++ {
-		toRet = append(toRet, s.Nodes[i].ID)
+		toRet[i] = s.Nodes[i].ID
 	}
 
 	return toRet
@@ -212,7 +212,7 @@ func (s *NodeList) NodeIPs() []string {
 
 	toRet := make([]string, len(s.Nodes))
 	for i := 0; i < len(s.Nodes); i++ {
-		toRet = append(toRet, s.Nodes[i].IP)
+		toRet[i] = s.Nodes[i].IP
 	}
 
 	return toRet
