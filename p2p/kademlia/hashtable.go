@@ -3,7 +3,6 @@ package kademlia
 import (
 	"bytes"
 	"crypto/rand"
-	"encoding/hex"
 	"math"
 	"math/big"
 	"sync"
@@ -297,7 +296,7 @@ func (ht *HashTable) closestContactsWithInlcudingNode(num int, target []byte, ig
 	// Convert ignoredNodes slice to a map for faster lookup
 	ignoredMap := make(map[string]bool)
 	for _, node := range ignoredNodes {
-		ignoredMap[hex.EncodeToString(node.ID)] = true
+		ignoredMap[string(node.ID)] = true
 	}
 
 	nl := &NodeList{
@@ -332,7 +331,7 @@ func (ht *HashTable) closestContactsWithIncludingNodeList(num int, target []byte
 	// Convert ignoredNodes slice to a map for faster lookup
 	ignoredMap := make(map[string]bool)
 	for _, node := range ignoredNodes {
-		ignoredMap[hex.EncodeToString(node.ID)] = true
+		ignoredMap[string(node.ID)] = true
 	}
 
 	nl := &NodeList{
