@@ -647,7 +647,8 @@ func (s *Network) Call(ctx context.Context, request *Message, isLong bool) (*Mes
 	if err != nil {
 		return nil, errors.Errorf("encode: %w", err)
 	}
-	if _, err := conn.Write(data); err != nil {
+	if _, werr := conn.Write(data); werr != nil {
+		err = werr
 		return nil, errors.Errorf("conn write: %w", err)
 	}
 
