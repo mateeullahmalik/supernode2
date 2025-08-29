@@ -1,0 +1,28 @@
+#hope bulk clever tip road female fly quiz once dose journey sting hedgehog pull area envelope supreme maze project spike brave shed fish live
+# Supernode Configuration
+supernode:
+  key_name: "testkey2"
+  identity: "lumera1cf0ms9ttgdvz6zwlqfty4tjcawhuaq69p40w0c"
+  host: "0.0.0.0"
+  port: 4446
+  gateway_port: 8003
+
+# Keyring Configuration
+keyring:
+  backend: "test"
+  dir: "keys"
+  password: "keyring-password"
+
+# P2P Network Configuration
+p2p:
+  port: 4447
+  data_dir: "data/p2p"
+
+# Lumera Chain Configuration
+lumera:
+  grpc_addr: "localhost:9090"
+  chain_id: "testing"
+
+# RaptorQ Configuration
+raptorq:
+  files_dir: "raptorq_files"

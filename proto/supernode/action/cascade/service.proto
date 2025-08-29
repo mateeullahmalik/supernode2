@@ -1,0 +1,64 @@
+syntax = "proto3";
+package cascade;
+option go_package = "github.com/LumeraProtocol/supernode/v2/gen/supernode/action/cascade";
+
+service CascadeService {
+  rpc Register (stream RegisterRequest) returns (stream RegisterResponse);
+  rpc Download (DownloadRequest) returns (stream DownloadResponse);
+}
+
+message RegisterRequest {
+  oneof request_type {
+    DataChunk chunk = 1;
+    Metadata metadata = 2;
+  }
+}
+
+message DataChunk {
+  bytes data = 1;
+}
+
+message Metadata {
+  string task_id = 1;
+  string action_id = 2;
+}
+
+message RegisterResponse {
+  SupernodeEventType event_type = 1;
+  string message = 2;
+  string tx_hash = 3;
+}
+
+message DownloadRequest {
+  string action_id = 1;
+  string signature = 2;
+}
+
+message DownloadResponse {
+  oneof response_type {
+    DownloadEvent event = 1;
+    DataChunk chunk = 2;
+  }
+}
+
+message DownloadEvent {
+  SupernodeEventType event_type = 1;
+  string message = 2;
+}
+
+enum SupernodeEventType {
+  UNKNOWN = 0;
+  ACTION_RETRIEVED = 1;
+  ACTION_FEE_VERIFIED = 2;
+  TOP_SUPERNODE_CHECK_PASSED = 3;
+  METADATA_DECODED = 4;
+  DATA_HASH_VERIFIED = 5;
+  INPUT_ENCODED = 6;
+  SIGNATURE_VERIFIED = 7;
+  RQID_GENERATED = 8;
+  RQID_VERIFIED = 9;
+  ARTEFACTS_STORED = 10;
+  ACTION_FINALIZED = 11;
+  ARTEFACTS_DOWNLOADED = 12;
+}
+

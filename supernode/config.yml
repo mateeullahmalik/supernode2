@@ -1,0 +1,26 @@
+# Supernode Configuration
+supernode:
+  key_name: "mykey"  # Account name for the supernode in keyring
+  identity: "lumera1ccmw5plzuldntum2rz6kq6uq346vtrhrvwfzsa"  # Identity of the supernode, lumera address
+  host: "0.0.0.0"
+  port: 4444
+
+# Keyring Configuration
+keyring:
+  backend: "os"  # Options: test, file, os
+  dir: "keys"  # Keyring directory 
+
+# P2P Network Configuration
+p2p:
+  port: 4445
+  data_dir: "data/p2p"  # P2P data directory in home folder
+  
+
+# Lumera Chain Configuration
+lumera:
+  grpc_addr: "localhost:9090"
+  chain_id: "lumera"
+
+# RaptorQ Configuration
+raptorq:
+  files_dir: "raptorq_files"

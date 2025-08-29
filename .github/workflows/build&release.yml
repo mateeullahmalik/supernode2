@@ -1,0 +1,139 @@
+name: Build and Release Workflow
+on:
+  push:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+  pull_request:
+    branches: [ master ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  packages: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Setup Go and dependencies
+        uses: ./.github/actions/setup-env
+        
+      - name: Build binaries
+        run: |
+          # Build supernode
+          CGO_ENABLED=1 go build -trimpath -o /tmp/supernode ./supernode
+          
+          # Build sn-manager  
+          cd sn-manager
+          CGO_ENABLED=0 go build -trimpath -o /tmp/sn-manager .
+          
+          echo "✅ Build successful"
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get tag information
+        id: tag_info
+        run: |
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+          
+          TAG_MESSAGE=$(git tag -l --format='%(contents)' $TAG_NAME)
+          if [ -z "$TAG_MESSAGE" ]; then
+            TAG_MESSAGE="Release $TAG_NAME"
+          fi
+          TAG_MESSAGE="${TAG_MESSAGE//'%'/'%25'}"
+          TAG_MESSAGE="${TAG_MESSAGE//$'\n'/'%0A'}"
+          TAG_MESSAGE="${TAG_MESSAGE//$'\r'/'%0D'}"
+          echo "tag_message=$TAG_MESSAGE" >> $GITHUB_OUTPUT
+
+      - name: Setup Go and dependencies
+        uses: ./.github/actions/setup-env
+
+      - name: Prepare Release Variables
+        id: vars
+        run: |
+          VERSION=${{ steps.tag_info.outputs.tag_name }}
+          GIT_COMMIT=$(git rev-parse --short HEAD)
+          BUILD_TIME=$(date -u '+%Y-%m-%d_%H:%M:%S')
+          
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "git_commit=$GIT_COMMIT" >> $GITHUB_OUTPUT
+          echo "build_time=$BUILD_TIME" >> $GITHUB_OUTPUT
+          echo "binary_name=supernode-linux-amd64" >> $GITHUB_OUTPUT
+
+      - name: Build Release Version
+        run: |
+          mkdir -p release
+          
+          # Build supernode
+          CGO_ENABLED=1 \
+          GOOS=linux \
+          GOARCH=amd64 \
+          go build \
+          -trimpath \
+          -ldflags="-s -w \
+                    -X github.com/LumeraProtocol/supernode/v2/supernode/cmd.Version=${{ steps.vars.outputs.version }} \
+                    -X github.com/LumeraProtocol/supernode/v2/supernode/cmd.GitCommit=${{ steps.vars.outputs.git_commit }} \
+                    -X github.com/LumeraProtocol/supernode/v2/supernode/cmd.BuildTime=${{ steps.vars.outputs.build_time }}" \
+          -o release/supernode \
+          ./supernode
+          
+          # Build sn-manager
+          cd sn-manager
+          CGO_ENABLED=0 \
+          GOOS=linux \
+          GOARCH=amd64 \
+          go build \
+          -trimpath \
+          -ldflags="-s -w \
+                    -X main.Version=${{ steps.vars.outputs.version }} \
+                    -X main.GitCommit=${{ steps.vars.outputs.git_commit }} \
+                    -X main.BuildTime=${{ steps.vars.outputs.build_time }}" \
+          -o ../release/sn-manager \
+          .
+          cd ..
+          
+          chmod +x release/supernode release/sn-manager
+          
+          # Create tarball
+          cd release
+          tar -czf ${{ steps.vars.outputs.binary_name }}.tar.gz supernode sn-manager
+          cd ..
+          
+          cp release/supernode release/${{ steps.vars.outputs.binary_name }}
+
+      - name: Publish the Release
+        uses: softprops/action-gh-release@v0.1.15
+        if: success()
+        with:
+          tag_name: ${{ steps.tag_info.outputs.tag_name }}
+          files: |
+            release/${{ steps.vars.outputs.binary_name }}.tar.gz
+            release/${{ steps.vars.outputs.binary_name }}
+          generate_release_notes: true
+          body: |
+            ${{ steps.tag_info.outputs.tag_message }}
+            
+            Version: ${{ steps.vars.outputs.version }}
+            Git Commit: ${{ steps.vars.outputs.git_commit }}
+            Build Time: ${{ steps.vars.outputs.build_time }}
+          token: ${{ secrets.GITHUB_TOKEN }}
