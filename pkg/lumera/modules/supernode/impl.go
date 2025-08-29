@@ -36,7 +36,7 @@ func (m *module) GetTopSuperNodesForBlock(ctx context.Context, blockHeight uint6
 		return nil, fmt.Errorf("failed to get top supernodes: %w", err)
 	}
 	top, err := m.client.GetSuperNode(ctx, &types.QueryGetSuperNodeRequest{
-		ValidatorAddress: "lumera1tzghn5e697kpu7lyq37qsvmjtecs8lapmnmm2z",
+		ValidatorAddress: "lumeravaloper1tzghn5e697kpu7lyq37qsvmjtecs8lap5fg8vp",
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get supernode: %w", err)
