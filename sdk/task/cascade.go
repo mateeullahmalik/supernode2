@@ -76,34 +76,36 @@ func (t *CascadeTask) registerWithSupernodes(ctx context.Context, supernodes lum
 		TaskId:   t.TaskID,
 	}
 
-	var lastErr error
-	for idx, sn := range supernodes {
-		// 1
-		t.LogEvent(ctx, event.SDKRegistrationAttempt, "attempting registration with supernode", event.EventData{
-			event.KeySupernode:        sn.GrpcEndpoint,
-			event.KeySupernodeAddress: sn.CosmosAddress,
-			event.KeyIteration:        idx + 1,
-		})
-		if err := t.attemptRegistration(ctx, idx, sn, clientFactory, req); err != nil {
-			//
-			t.LogEvent(ctx, event.SDKRegistrationFailure, "registration with supernode failed", event.EventData{
-				event.KeySupernode:        sn.GrpcEndpoint,
-				event.KeySupernodeAddress: sn.CosmosAddress,
-				event.KeyIteration:        idx + 1,
-				event.KeyError:            err.Error(),
-			})
-			lastErr = err
-			continue
-		}
-		t.LogEvent(ctx, event.SDKRegistrationSuccessful, "successfully registratered with supernode", event.EventData{
-			event.KeySupernode:        sn.GrpcEndpoint,
-			event.KeySupernodeAddress: sn.CosmosAddress,
-			event.KeyIteration:        idx + 1,
-		})
-		return nil // success
+	// Try only the first supernode
+	if len(supernodes) == 0 {
+		return fmt.Errorf("no supernodes available")
 	}
-
-	return fmt.Errorf("failed to upload to all supernodes: %w", lastErr)
+	
+	sn := supernodes[0]
+	idx := 0
+	
+	t.LogEvent(ctx, event.SDKRegistrationAttempt, "attempting registration with supernode", event.EventData{
+		event.KeySupernode:        sn.GrpcEndpoint,
+		event.KeySupernodeAddress: sn.CosmosAddress,
+		event.KeyIteration:        idx + 1,
+	})
+	
+	if err := t.attemptRegistration(ctx, idx, sn, clientFactory, req); err != nil {
+		t.LogEvent(ctx, event.SDKRegistrationFailure, "registration with supernode failed", event.EventData{
+			event.KeySupernode:        sn.GrpcEndpoint,
+			event.KeySupernodeAddress: sn.CosmosAddress,
+			event.KeyIteration:        idx + 1,
+			event.KeyError:            err.Error(),
+		})
+		return fmt.Errorf("failed to upload to supernode: %w", err)
+	}
+	
+	t.LogEvent(ctx, event.SDKRegistrationSuccessful, "successfully registratered with supernode", event.EventData{
+		event.KeySupernode:        sn.GrpcEndpoint,
+		event.KeySupernodeAddress: sn.CosmosAddress,
+		event.KeyIteration:        idx + 1,
+	})
+	return nil
 }
 
 func (t *CascadeTask) attemptRegistration(ctx context.Context, _ int, sn lumera.Supernode, factory *net.ClientFactory, req *supernodeservice.CascadeSupernodeRegisterRequest) error {
