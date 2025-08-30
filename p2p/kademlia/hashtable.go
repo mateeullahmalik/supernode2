@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
-	"math"
 	"math/big"
 	"sync"
 	"time"
