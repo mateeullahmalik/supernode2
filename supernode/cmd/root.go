@@ -1,12 +1,13 @@
 package cmd
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
+    "fmt"
+    "os"
+    "path/filepath"
 
-	"github.com/LumeraProtocol/supernode/v2/supernode/config"
-	"github.com/spf13/cobra"
+    "github.com/LumeraProtocol/supernode/v2/supernode/config"
+    "github.com/LumeraProtocol/supernode/v2/pkg/storage/queries"
+    "github.com/spf13/cobra"
 )
 
 var (
@@ -75,14 +76,17 @@ This application allows you to create and recover keys using mnemonics.`,
 			return fmt.Errorf("no config file found in base directory (%s)", baseDir)
 		}
 
-		// Load configuration
-		appConfig, err = config.LoadConfig(cfgFile, baseDir)
-		if err != nil {
-			return fmt.Errorf("failed to load config file %s: %w", cfgFile, err)
-		}
+        // Load configuration
+        appConfig, err = config.LoadConfig(cfgFile, baseDir)
+        if err != nil {
+            return fmt.Errorf("failed to load config file %s: %w", cfgFile, err)
+        }
 
-		return nil
-	},
+        // Ensure history DB resides under the app base directory (not ~/.lumera)
+        queries.SetHistoryDBBaseDir(baseDir)
+
+        return nil
+    },
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.

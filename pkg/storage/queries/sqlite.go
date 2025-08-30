@@ -1,9 +1,10 @@
 package queries
 
 import (
-	"context"
-	"fmt"
-	"path/filepath"
+    "context"
+    "fmt"
+    "path/filepath"
+    "os"
 
 	"github.com/LumeraProtocol/supernode/v2/pkg/configurer"
 	"github.com/LumeraProtocol/supernode/v2/pkg/logtrace"
@@ -12,8 +13,17 @@ import (
 )
 
 var (
-	DefaulthPath = configurer.DefaultPath()
+    // historyBasePath is the base directory for history.db; defaults to OS-specific config path
+    historyBasePath = configurer.DefaultPath()
 )
+
+// SetHistoryDBBaseDir allows consumers (e.g., CLI) to override the base directory
+// for the history database (e.g., to use application base dir like ~/.supernode).
+func SetHistoryDBBaseDir(dir string) {
+    if dir != "" {
+        historyBasePath = dir
+    }
+}
 
 const minVerifications = 3
 const createTaskHistory string = `
@@ -298,11 +308,20 @@ func (s *SQLiteStore) CloseHistoryDB(ctx context.Context) {
 
 // OpenHistoryDB opens history DB
 func OpenHistoryDB() (LocalStoreInterface, error) {
-	dbFile := filepath.Join(DefaulthPath, historyDBName)
-	db, err := sqlx.Connect("sqlite3", dbFile)
-	if err != nil {
-		return nil, fmt.Errorf("cannot open sqlite database: %w", err)
-	}
+    // Ensure the base directory exists before opening the DB
+    if _, err := os.Stat(historyBasePath); os.IsNotExist(err) {
+        if mkErr := os.MkdirAll(historyBasePath, 0o755); mkErr != nil {
+            return nil, fmt.Errorf("cannot create history db directory %q: %w", historyBasePath, mkErr)
+        }
+    } else if err != nil {
+        return nil, fmt.Errorf("cannot stat history db directory %q: %w", historyBasePath, err)
+    }
+
+    dbFile := filepath.Join(historyBasePath, historyDBName)
+    db, err := sqlx.Connect("sqlite3", dbFile)
+    if err != nil {
+        return nil, fmt.Errorf("cannot open sqlite database: %w", err)
+    }
 
 	if _, err := db.Exec(createTaskHistory); err != nil {
 		return nil, fmt.Errorf("cannot create table(s): %w", err)

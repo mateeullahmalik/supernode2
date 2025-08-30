@@ -9,12 +9,12 @@ import (
 )
 
 var defaultConfigPaths = []string{
-	"$HOME/.lumera",
-	".",
+    "$HOME/.supernode",
+    ".",
 }
 
 // DefaultPath returns the default config path for Linux OS.
 func DefaultPath() string {
-	homeDir, _ := os.UserHomeDir()
-	return filepath.Join(homeDir, ".lumera")
+    homeDir, _ := os.UserHomeDir()
+    return filepath.Join(homeDir, ".supernode")
 }
