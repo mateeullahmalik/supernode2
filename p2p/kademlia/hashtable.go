@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/LumeraProtocol/supernode/v2/pkg/errors"
+	"github.com/LumeraProtocol/supernode/v2/pkg/utils"
 )
 
 const (
@@ -198,6 +199,14 @@ func (ht *HashTable) closestContacts(num int, target []byte, ignoredNodes []*Nod
 	ht.mutex.RLock()
 	defer ht.mutex.RUnlock()
 
+	// Ensure target is hashed for consistent distance comparisons
+	var hashedTarget []byte
+	if len(target) != 32 {
+		hashedTarget, _ = utils.Blake3Hash(target)
+	} else {
+		hashedTarget = target
+	}
+
 	// Convert ignoredNodes slice to a map for faster lookup
 	ignoredMap := make(map[string]bool)
 	for _, node := range ignoredNodes {
@@ -205,7 +214,7 @@ func (ht *HashTable) closestContacts(num int, target []byte, ignoredNodes []*Nod
 	}
 
 	nl := &NodeList{
-		Comparator: target,
+		Comparator: hashedTarget,
 	}
 
 	counter := 0
@@ -294,6 +303,14 @@ func (ht *HashTable) closestContactsWithInlcudingNode(num int, target []byte, ig
 	ht.mutex.RLock()
 	defer ht.mutex.RUnlock()
 
+	// Ensure target is hashed for consistent distance comparisons
+	var hashedTarget []byte
+	if len(target) != 32 {
+		hashedTarget, _ = utils.Blake3Hash(target)
+	} else {
+		hashedTarget = target
+	}
+
 	// Convert ignoredNodes slice to a map for faster lookup
 	ignoredMap := make(map[string]bool)
 	for _, node := range ignoredNodes {
@@ -301,7 +318,7 @@ func (ht *HashTable) closestContactsWithInlcudingNode(num int, target []byte, ig
 	}
 
 	nl := &NodeList{
-		Comparator: target,
+		Comparator: hashedTarget,
 	}
 
 	// Flatten the routeTable and add nodes to nl if they're not in the ignoredMap
@@ -329,6 +346,14 @@ func (ht *HashTable) closestContactsWithIncludingNodeList(num int, target []byte
 	ht.mutex.RLock()
 	defer ht.mutex.RUnlock()
 
+	// Ensure target is hashed for consistent distance comparisons
+	var hashedTarget []byte
+	if len(target) != 32 {
+		hashedTarget, _ = utils.Blake3Hash(target)
+	} else {
+		hashedTarget = target
+	}
+
 	// Convert ignoredNodes slice to a map for faster lookup
 	ignoredMap := make(map[string]bool)
 	for _, node := range ignoredNodes {
@@ -336,7 +361,7 @@ func (ht *HashTable) closestContactsWithIncludingNodeList(num int, target []byte
 	}
 
 	nl := &NodeList{
-		Comparator: target,
+		Comparator: hashedTarget,
 	}
 
 	// Flatten the routeTable and add nodes to nl if they're not in the ignoredMap
