@@ -17,8 +17,13 @@ import (
 const (
 	defaultLumeraPort = "9090"
 
-	keepaliveTime    = 30 * time.Second
-	keepaliveTimeout = 10 * time.Second
+    // Keepalive tuned to comply with common gRPC server enforcement:
+    // - Many servers enforce a minimum ping interval of 5 minutes when
+    //   PermitWithoutStream is enabled. Shorter intervals can trigger
+    //   GOAWAY ENHANCE_YOUR_CALM "too_many_pings".
+    // - Use a value > 5m and avoid pings without active streams.
+    keepaliveTime    = 6 * time.Minute
+    keepaliveTimeout = 10 * time.Second
 )
 
 // Connection defines the interface for a client connection.
@@ -109,11 +114,13 @@ func createGRPCConnection(ctx context.Context, hostPort string, creds credential
 	_ = ctx // Keeping this for api compatibility
 	opts := []grpc.DialOption{
 		grpc.WithTransportCredentials(creds),
-		grpc.WithKeepaliveParams(keepalive.ClientParameters{
-			Time:                keepaliveTime,
-			Timeout:             keepaliveTimeout,
-			PermitWithoutStream: true,
-		}),
+        grpc.WithKeepaliveParams(keepalive.ClientParameters{
+            Time:                keepaliveTime,
+            Timeout:             keepaliveTimeout,
+            // Avoid pings when there are no active streams to prevent
+            // server-side ENHANCE_YOUR_CALM (too_many_pings) GOAWAYs.
+            PermitWithoutStream: false,
+        }),
 	}
 
 	return grpc.NewClient(hostPort, opts...)
