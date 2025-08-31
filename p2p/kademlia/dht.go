@@ -46,6 +46,10 @@ const (
 	maxIterations = 4
 )
 
+// quickPingTimeout is a short timeout budget to pre‑verify newly learned peers
+// before admitting them into the routing table (peer hygiene).
+const quickPingTimeout = 3 * time.Second
+
 // DHT represents the state of the queries node in the distributed hash table
 type DHT struct {
 	ht             *HashTable       // the hashtable for routing
@@ -1281,6 +1285,31 @@ func (s *DHT) sendStoreData(ctx context.Context, n *Node, request *StoreDataRequ
 	return response, nil
 }
 
+// quickPing verifies liveness of a node with a short timeout budget and logs pass/fail.
+func (s *DHT) quickPing(ctx context.Context, n *Node) error {
+	if n == nil {
+		return fmt.Errorf("nil node")
+	}
+	// Build a short‑lived context for the ping
+	qctx, cancel := context.WithTimeout(ctx, quickPingTimeout)
+	defer cancel()
+
+	req := s.newMessage(Ping, n, nil)
+	if _, err := s.network.Call(qctx, req, false); err != nil {
+		logtrace.Info(ctx, "Quick ping failed", logtrace.Fields{
+			logtrace.FieldModule: "p2p",
+			"node":               n.String(),
+			logtrace.FieldError:  err.Error(),
+		})
+		return fmt.Errorf("quick ping failed: %w", err)
+	}
+	logtrace.Info(ctx, "Quick ping passed", logtrace.Fields{
+		logtrace.FieldModule: "p2p",
+		"node":               n.String(),
+	})
+	return nil
+}
+
 // add a node into the appropriate k bucket, return the removed node if it's full
 func (s *DHT) addNode(ctx context.Context, node *Node) *Node {
 	// ensure this is not itself address
@@ -1293,6 +1322,15 @@ func (s *DHT) addNode(ctx context.Context, node *Node) *Node {
 	node.SetHashedID()
 
 	index := s.ht.bucketIndex(s.ht.self.HashedID, node.HashedID)
+
+	// If the node is not already present, enforce hygiene with a quick ping
+	if !s.ht.hasBucketNode(index, node.ID) {
+		if err := s.quickPing(ctx, node); err != nil {
+			// Mark node as problematic to avoid repeated immediate retries
+			s.ignorelist.IncrementCount(node)
+			return nil
+		}
+	}
 
 	if err := s.updateReplicationNode(ctx, node.ID, node.IP, node.Port, true); err != nil {
 		logtrace.Error(ctx, "Update replication node failed", logtrace.Fields{
@@ -1534,12 +1572,29 @@ func (s *DHT) removeNode(ctx context.Context, node *Node) {
 
 func (s *DHT) addKnownNodes(ctx context.Context, nodes []*Node, knownNodes map[string]*Node) {
 	for _, node := range nodes {
-		if _, ok := knownNodes[string(node.ID)]; ok {
+		if node == nil {
 			continue
 		}
-		node.SetHashedID()
-		knownNodes[string(node.ID)] = node
+		if _, ok := knownNodes[string(node.ID)]; ok {
+			// Already tracked in known map
+			continue
+		}
 
+		// Basic sanity on IP to avoid obvious bad addresses making it through.
+		// We skip unspecified addresses here; further DNS/IP hygiene is handled
+		// during bootstrap when building candidate sets.
+		if node.IP == "" || node.IP == "0.0.0.0" {
+			logtrace.Info(ctx, "Skip adding known node due to invalid IP", logtrace.Fields{
+				logtrace.FieldModule: "p2p",
+				"node":               node.String(),
+			})
+			continue
+		}
+
+		node.SetHashedID()
+
+		// Mark as known and let addNode handle hygiene (quick ping + admission).
+		knownNodes[string(node.ID)] = node
 		s.addNode(ctx, node)
 		bucket := s.ht.bucketIndex(s.ht.self.HashedID, node.HashedID)
 		s.ht.resetRefreshTime(bucket)
