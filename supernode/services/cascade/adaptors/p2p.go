@@ -155,7 +155,12 @@ func (c *p2pImpl) storeSymbolsInP2P(ctx context.Context, taskID, root string, fi
 		return fmt.Errorf("load symbols: %w", err)
 	}
 
-	if err := c.p2p.StoreBatch(ctx, symbols, storage.P2PDataRaptorQSymbol, taskID); err != nil {
+	// Ensure a generous per-batch timeout for symbol storage that is not tied
+	// strictly to the caller context's deadline.
+	symCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	if err := c.p2p.StoreBatch(symCtx, symbols, storage.P2PDataRaptorQSymbol, taskID); err != nil {
 		return fmt.Errorf("p2p store batch: %w", err)
 	}
 	logtrace.Info(ctx, "stored batch symbols", logtrace.Fields{"count": len(symbols)})
