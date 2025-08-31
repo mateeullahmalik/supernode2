@@ -193,7 +193,7 @@ func (s *DHT) Replicate(ctx context.Context) {
 			if err := s.updateLastReplicated(ctx, info.ID, to); err != nil {
 				logtrace.Error(ctx, "replicate update lastReplicated failed", logtrace.Fields{logtrace.FieldModule: "p2p", "rep-ip": info.IP, "rep-id": string(info.ID)})
 			} else {
-				logtrace.Debug(ctx, "no replication keys - replicate update lastReplicated success", logtrace.Fields{logtrace.FieldModule: "p2p", "node": info.IP, "to": to.String(), "fetch-keys": 0})
+				logtrace.Info(ctx, "no replication keys - replicate update lastReplicated success", logtrace.Fields{logtrace.FieldModule: "p2p", "node": info.IP, "to": to.String(), "fetch-keys": 0})
 			}
 
 			continue

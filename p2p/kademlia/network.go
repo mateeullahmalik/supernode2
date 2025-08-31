@@ -80,14 +80,14 @@ func NewNetwork(ctx context.Context, dht *DHT, self *Node, clientTC, serverTC cr
 	// new tcp listener
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
-		logtrace.Debug(ctx, "Error trying to get tcp socket", logtrace.Fields{
+		logtrace.Info(ctx, "Error trying to get tcp socket", logtrace.Fields{
 			logtrace.FieldModule: "p2p",
 			logtrace.FieldError:  err.Error(),
 		})
 		return nil, err
 	}
 	s.listener = listener
-	logtrace.Debug(ctx, "Listening on", logtrace.Fields{
+	logtrace.Info(ctx, "Listening on", logtrace.Fields{
 		logtrace.FieldModule: "p2p",
 		"address":            addr,
 	})
@@ -237,7 +237,7 @@ func (s *Network) handleStoreData(ctx context.Context, message *Message) (res []
 		return s.generateResponseMessage(StoreData, message.Sender, ResultFailed, err.Error())
 	}
 
-	logtrace.Debug(ctx, "Handle store data", logtrace.Fields{logtrace.FieldModule: "p2p", "message": message.String()})
+	logtrace.Info(ctx, "Handle store data", logtrace.Fields{logtrace.FieldModule: "p2p", "message": message.String()})
 
 	// add the sender to queries hash table
 	s.dht.addNode(ctx, message.Sender)
@@ -278,7 +278,7 @@ func (s *Network) handleReplicate(ctx context.Context, message *Message) (res []
 		return s.generateResponseMessage(Replicate, message.Sender, ResultFailed, err.Error())
 	}
 
-	logtrace.Debug(ctx, "Handle replicate data", logtrace.Fields{logtrace.FieldModule: "p2p", "message": message.String()})
+	logtrace.Info(ctx, "Handle replicate data", logtrace.Fields{logtrace.FieldModule: "p2p", "message": message.String()})
 
 	if err := s.handleReplicateRequest(ctx, request, message.Sender.ID, message.Sender.IP, message.Sender.Port); err != nil {
 		return s.generateResponseMessage(Replicate, message.Sender, ResultFailed, err.Error())
@@ -307,7 +307,7 @@ func (s *Network) handleReplicateRequest(ctx context.Context, req *ReplicateData
 		return fmt.Errorf("unable to retrieve batch replication keys: %w", err)
 	}
 
-	logtrace.Debug(ctx, "Store batch replication keys to be stored", logtrace.Fields{
+	logtrace.Info(ctx, "Store batch replication keys to be stored", logtrace.Fields{
 		logtrace.FieldModule: "p2p",
 		"to-store-keys":      len(keysToStore),
 		"rcvd-keys":          len(req.Keys),
@@ -340,7 +340,7 @@ func (s *Network) handlePing(_ context.Context, message *Message) ([]byte, error
 func (s *Network) handleConn(ctx context.Context, rawConn net.Conn) {
 	var conn net.Conn
 	var err error
-	logtrace.Debug(ctx, "Handle connection", logtrace.Fields{
+	logtrace.Info(ctx, "Handle connection", logtrace.Fields{
 		logtrace.FieldModule: "p2p",
 		"local-addr":         rawConn.LocalAddr().String(),
 		"remote-addr":        rawConn.RemoteAddr().String(),
@@ -669,7 +669,7 @@ func (s *Network) Call(ctx context.Context, request *Message, isLong bool) (*Mes
 
 func (s *Network) handleBatchFindValues(ctx context.Context, message *Message, reqID string) (res []byte, err error) {
 	// Try to acquire the semaphore, wait up to 1 minute
-	logtrace.Debug(ctx, "Attempting to acquire semaphore immediately", logtrace.Fields{logtrace.FieldModule: "p2p"})
+	logtrace.Info(ctx, "Attempting to acquire semaphore immediately", logtrace.Fields{logtrace.FieldModule: "p2p"})
 	if !s.sem.TryAcquire(1) {
 		logtrace.Info(ctx, "Immediate acquisition failed. Waiting up to 1 minute", logtrace.Fields{logtrace.FieldModule: "p2p"})
 		ctxWithTimeout, cancel := context.WithTimeout(ctx, 1*time.Minute)
@@ -811,7 +811,7 @@ func (s *Network) handleBatchFindValuesRequest(ctx context.Context, req *BatchFi
 	if len(req.Keys) > 0 {
 		// log.WithContext(ctx).WithField("p2p-req-id", reqID).WithField("keys[0]", req.Keys[0]).WithField("keys[len]", req.Keys[len(req.Keys)-1]).
 		// 	WithField("from-ip", ip).Debug("first & last batch keys")
-		logtrace.Debug(ctx, "First & last batch keys", logtrace.Fields{
+		logtrace.Info(ctx, "First & last batch keys", logtrace.Fields{
 			logtrace.FieldModule: "p2p",
 			"p2p-req-id":         reqID,
 			"keys[0]":            req.Keys[0],
@@ -865,7 +865,7 @@ func findOptimalCompression(count int, keys []string, values [][]byte) (bool, in
 	// If the initial compressed data is under the threshold
 	if utils.BytesIntToMB(len(compressedData)) < defaultMaxPayloadSize {
 		// log.WithField("compressed-data-len", utils.BytesToMB(uint64(len(compressedData)))).WithField("count", count).Debug("initial compression")
-		logtrace.Debug(context.TODO(), "Initial compression", logtrace.Fields{
+		logtrace.Info(context.TODO(), "Initial compression", logtrace.Fields{
 			"compressed-data-len": utils.BytesToMB(uint64(len(compressedData))),
 			"count":               count,
 		})
@@ -877,7 +877,7 @@ func findOptimalCompression(count int, keys []string, values [][]byte) (bool, in
 	for utils.BytesIntToMB(len(compressedData)) >= defaultMaxPayloadSize {
 		size := utils.BytesIntToMB(len(compressedData))
 		// log.WithField("compressed-data-len", size).WithField("current-count", currentValuesCount).WithField("iter", iter).Debug("optimal compression")
-		logtrace.Debug(context.TODO(), "Optimal compression", logtrace.Fields{
+		logtrace.Info(context.TODO(), "Optimal compression", logtrace.Fields{
 			"compressed-data-len": size,
 			"current-count":       currentValuesCount,
 			"iter":                iter,
@@ -952,7 +952,7 @@ func findTopHeaviestKeys(dataMap map[string][]byte, size int) (int, []string) {
 
 	if size > (2 * defaultMaxPayloadSize) {
 		// log.Debug("find optimal compression decreasing payload by half")
-		logtrace.Debug(context.TODO(), "Find optimal compression decreasing payload by half", logtrace.Fields{
+		logtrace.Info(context.TODO(), "Find optimal compression decreasing payload by half", logtrace.Fields{
 			"size":  size,
 			"count": count,
 		})

@@ -197,7 +197,7 @@ func (s *p2p) NClosestNodes(ctx context.Context, n int, key string, ignores ...s
 		ret = append(ret, string(node.ID))
 	}
 
-	logtrace.Debug(ctx, "closest nodes retrieved", logtrace.Fields{"no_of_closest_nodes": n, "file_hash": key, "closest_nodes": ret})
+	logtrace.Info(ctx, "closest nodes retrieved", logtrace.Fields{"no_of_closest_nodes": n, "file_hash": key, "closest_nodes": ret})
 	return ret
 }
 
@@ -218,7 +218,7 @@ func (s *p2p) NClosestNodesWithIncludingNodeList(ctx context.Context, n int, key
 		ret = append(ret, string(node.ID))
 	}
 
-	logtrace.Debug(ctx, "closest nodes retrieved", logtrace.Fields{"no_of_closest_nodes": n, "file_hash": key, "closest_nodes": ret})
+	logtrace.Info(ctx, "closest nodes retrieved", logtrace.Fields{"no_of_closest_nodes": n, "file_hash": key, "closest_nodes": ret})
 	return ret
 }
 

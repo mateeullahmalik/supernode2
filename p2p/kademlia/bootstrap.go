@@ -186,7 +186,7 @@ func (s *DHT) ConfigureBootstrapNodes(ctx context.Context, bootstrapNodes string
 	for _, node := range mapNodes {
 		hID, _ := utils.Blake3Hash(node.ID)
 		node.HashedID = hID
-		logtrace.Debug(ctx, "node adding", logtrace.Fields{
+		logtrace.Info(ctx, "node adding", logtrace.Fields{
 			logtrace.FieldModule: "p2p",
 			"node":               node.String(),
 			"hashed_id":          string(node.HashedID),
@@ -265,20 +265,20 @@ func (s *DHT) Bootstrap(ctx context.Context, bootstrapNodes string) error {
 					// Mark this address as temporarily bad to avoid retrying immediately
 					s.cache.SetWithExpiry(addr, []byte("true"), badAddrExpiryHours*time.Hour)
 
-					logtrace.Debug(ctx, "network call failed, sleeping 3 seconds", logtrace.Fields{
+					logtrace.Info(ctx, "network call failed, sleeping 3 seconds", logtrace.Fields{
 						logtrace.FieldModule: "p2p",
 						logtrace.FieldError:  err.Error(),
 					})
 					time.Sleep(5 * time.Second)
 					continue
 				}
-				logtrace.Debug(ctx, "ping response", logtrace.Fields{
+				logtrace.Info(ctx, "ping response", logtrace.Fields{
 					logtrace.FieldModule: "p2p",
 					"response":           response.String(),
 				})
 
 				// add the node to the route table
-				logtrace.Debug(ctx, "add-node params", logtrace.Fields{
+				logtrace.Info(ctx, "add-node params", logtrace.Fields{
 					logtrace.FieldModule: "p2p",
 					"sender-id":          string(response.Sender.ID),
 					"sender-ip":          string(response.Sender.IP),

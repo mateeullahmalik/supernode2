@@ -135,7 +135,7 @@ func LoadConfig(filename string, baseDir string) (*Config, error) {
 		return nil, err
 	}
 
-	logtrace.Debug(ctx, "Configuration loaded successfully", logtrace.Fields{
+	logtrace.Info(ctx, "Configuration loaded successfully", logtrace.Fields{
 		"baseDir":         baseDir,
 		"keyringDir":      config.GetKeyringDir(),
 		"p2pDataDir":      config.GetP2PDataDir(),

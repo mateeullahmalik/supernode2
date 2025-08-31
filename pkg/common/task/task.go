@@ -71,7 +71,7 @@ func (task *task) Cancel() {
 
 	select {
 	case <-task.Done():
-		logtrace.Debug(context.Background(), "task cancelled", logtrace.Fields{"task_id": task.ID()})
+		logtrace.Info(context.Background(), "task cancelled", logtrace.Fields{"task_id": task.ID()})
 		return
 	default:
 		close(task.doneCh)

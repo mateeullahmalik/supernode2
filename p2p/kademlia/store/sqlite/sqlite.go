@@ -74,7 +74,7 @@ func NewStore(ctx context.Context, dataDir string, cloud cloud.Storage, mst *Mig
 		quit:     make(chan bool),
 	}
 
-	logtrace.Debug(ctx, "p2p data dir", logtrace.Fields{logtrace.FieldModule: "p2p", "data_dir": dataDir})
+	logtrace.Info(ctx, "p2p data dir", logtrace.Fields{logtrace.FieldModule: "p2p", "data_dir": dataDir})
 	if _, err := os.Stat(dataDir); os.IsNotExist(err) {
 		if err := os.MkdirAll(dataDir, 0750); err != nil {
 			return nil, fmt.Errorf("mkdir %q: %w", dataDir, err)
@@ -131,18 +131,18 @@ func NewStore(ctx context.Context, dataDir string, cloud cloud.Storage, mst *Mig
 		logtrace.Error(ctx, "URGENT! unable to create datatype column in p2p database", logtrace.Fields{logtrace.FieldError: err.Error()})
 	}
 
-	logtrace.Debug(ctx, "p2p database creating index on key column", logtrace.Fields{logtrace.FieldModule: "p2p"})
+	logtrace.Info(ctx, "p2p database creating index on key column", logtrace.Fields{logtrace.FieldModule: "p2p"})
 	_, err = db.Exec("CREATE INDEX IF NOT EXISTS idx_key ON data(key);")
 	if err != nil {
 		logtrace.Error(ctx, "URGENT! unable to create index on key column in p2p database", logtrace.Fields{logtrace.FieldError: err.Error()})
 	}
-	logtrace.Debug(ctx, "p2p database created index on key column", logtrace.Fields{logtrace.FieldModule: "p2p"})
+	logtrace.Info(ctx, "p2p database created index on key column", logtrace.Fields{logtrace.FieldModule: "p2p"})
 
 	_, err = db.Exec("CREATE INDEX IF NOT EXISTS idx_createdat ON data(createdAt);")
 	if err != nil {
 		logtrace.Error(ctx, "URGENT! unable to create index on createdAt column in p2p database", logtrace.Fields{logtrace.FieldError: err.Error()})
 	}
-	logtrace.Debug(ctx, "p2p database created index on createdAt column", logtrace.Fields{logtrace.FieldModule: "p2p"})
+	logtrace.Info(ctx, "p2p database created index on createdAt column", logtrace.Fields{logtrace.FieldModule: "p2p"})
 
 	pragmas := []string{
 		"PRAGMA journal_mode=WAL;",
@@ -616,13 +616,13 @@ func (s *Store) deleteRecord(key []byte) {
 
 	res, err := s.db.Exec("DELETE FROM data WHERE key = ?", hkey)
 	if err != nil {
-		logtrace.Debug(ctx, "cannot delete record by key", logtrace.Fields{logtrace.FieldModule: "p2p", "key": hkey, logtrace.FieldError: err.Error()})
+		logtrace.Info(ctx, "cannot delete record by key", logtrace.Fields{logtrace.FieldModule: "p2p", "key": hkey, logtrace.FieldError: err.Error()})
 	}
 
 	if rowsAffected, err := res.RowsAffected(); err != nil {
-		logtrace.Debug(ctx, "failed to delete record by key", logtrace.Fields{logtrace.FieldModule: "p2p", "key": hkey, logtrace.FieldError: err.Error()})
+		logtrace.Info(ctx, "failed to delete record by key", logtrace.Fields{logtrace.FieldModule: "p2p", "key": hkey, logtrace.FieldError: err.Error()})
 	} else if rowsAffected == 0 {
-		logtrace.Debug(ctx, "failed to delete record by key", logtrace.Fields{logtrace.FieldModule: "p2p", "key": hkey})
+		logtrace.Info(ctx, "failed to delete record by key", logtrace.Fields{logtrace.FieldModule: "p2p", "key": hkey})
 	}
 }
 

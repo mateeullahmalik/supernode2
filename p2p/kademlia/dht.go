@@ -1825,6 +1825,10 @@ func (s *DHT) batchFindNode(ctx context.Context, payload [][]byte, nodes map[str
 			default:
 				data := &BatchFindNodeRequest{HashedTarget: payload}
 				request := s.newMessage(BatchFindNode, receiver, data)
+				logtrace.Info(ctx, "Batch find node request", logtrace.Fields{
+					"request": request.String(),
+				})
+
 				response, err := s.network.Call(ctx, request, false)
 				if err != nil {
 					s.ignorelist.IncrementCount(receiver)
