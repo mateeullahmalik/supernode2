@@ -3,13 +3,12 @@ package kademlia
 import (
 	"bytes"
 	"crypto/rand"
-	"encoding/hex"
-	"math"
 	"math/big"
 	"sync"
 	"time"
 
 	"github.com/LumeraProtocol/supernode/v2/pkg/errors"
+	"github.com/LumeraProtocol/supernode/v2/pkg/utils"
 )
 
 const (
@@ -97,15 +96,28 @@ func (ht *HashTable) refreshNode(id []byte) {
 	bucket := ht.routeTable[index]
 
 	var offset int
+	found := false
 	// find the position of the node
 	for i, v := range bucket {
-		if bytes.Equal(v.ID, id) {
+		if bytes.Equal(v.HashedID, id) {
 			offset = i
+			found = true
 			break
 		}
 	}
 
+	// Safety check: only rotate if node was actually found
+	if !found {
+		// Node not in bucket, nothing to refresh
+		return
+	}
+
 	// makes the node to the end
+
+	if offset < 0 {
+		return
+	} // nothing to refresh
+
 	current := bucket[offset]
 	bucket = append(bucket[:offset], bucket[offset+1:]...)
 	bucket = append(bucket, current)
@@ -130,7 +142,7 @@ func (ht *HashTable) randomIDFromBucket(bucket int) []byte {
 	index := bucket / 8
 	var id []byte
 	for i := 0; i < index; i++ {
-		id = append(id, ht.self.ID[i])
+		id = append(id, ht.self.HashedID[i])
 	}
 	start := bucket % 8
 
@@ -139,7 +151,7 @@ func (ht *HashTable) randomIDFromBucket(bucket int) []byte {
 	for i := 0; i < 8; i++ {
 		var bit bool
 		if i < start {
-			bit = hasBit(ht.self.ID[index], uint(i))
+			bit = hasBit(ht.self.HashedID[index], uint(i))
 		} else {
 			nBig, _ := rand.Int(rand.Reader, big.NewInt(2))
 			n := nBig.Int64()
@@ -147,13 +159,13 @@ func (ht *HashTable) randomIDFromBucket(bucket int) []byte {
 			bit = n == 1
 		}
 		if bit {
-			first += byte(math.Pow(2, float64(7-i)))
+			first |= 1 << (7 - i)
 		}
 	}
 	id = append(id, first)
 
 	// randomize each remaining byte
-	for i := index + 1; i < 20; i++ {
+	for i := index + 1; i < B/8; i++ {
 		nBig, _ := rand.Int(rand.Reader, big.NewInt(256))
 		n := nBig.Int64()
 
@@ -198,6 +210,14 @@ func (ht *HashTable) closestContacts(num int, target []byte, ignoredNodes []*Nod
 	ht.mutex.RLock()
 	defer ht.mutex.RUnlock()
 
+	// Ensure target is hashed for consistent distance comparisons
+	var hashedTarget []byte
+	if len(target) != 32 {
+		hashedTarget, _ = utils.Blake3Hash(target)
+	} else {
+		hashedTarget = target
+	}
+
 	// Convert ignoredNodes slice to a map for faster lookup
 	ignoredMap := make(map[string]bool)
 	for _, node := range ignoredNodes {
@@ -205,7 +225,7 @@ func (ht *HashTable) closestContacts(num int, target []byte, ignoredNodes []*Nod
 	}
 
 	nl := &NodeList{
-		Comparator: target,
+		Comparator: hashedTarget,
 	}
 
 	counter := 0
@@ -294,14 +314,20 @@ func (ht *HashTable) closestContactsWithInlcudingNode(num int, target []byte, ig
 	ht.mutex.RLock()
 	defer ht.mutex.RUnlock()
 
+	var hashedTarget []byte
+	if len(target) != 32 {
+		hashedTarget, _ = utils.Blake3Hash(target)
+	} else {
+		hashedTarget = target
+	}
 	// Convert ignoredNodes slice to a map for faster lookup
 	ignoredMap := make(map[string]bool)
 	for _, node := range ignoredNodes {
-		ignoredMap[hex.EncodeToString(node.ID)] = true
+		ignoredMap[string(node.ID)] = true
 	}
 
 	nl := &NodeList{
-		Comparator: target,
+		Comparator: hashedTarget,
 	}
 
 	// Flatten the routeTable and add nodes to nl if they're not in the ignoredMap
@@ -332,7 +358,7 @@ func (ht *HashTable) closestContactsWithIncludingNodeList(num int, target []byte
 	// Convert ignoredNodes slice to a map for faster lookup
 	ignoredMap := make(map[string]bool)
 	for _, node := range ignoredNodes {
-		ignoredMap[hex.EncodeToString(node.ID)] = true
+		ignoredMap[string(node.ID)] = true
 	}
 
 	nl := &NodeList{

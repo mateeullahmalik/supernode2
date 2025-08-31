@@ -362,12 +362,17 @@ func (s *Network) handleConn(ctx context.Context, rawConn net.Conn) {
 
 	defer conn.Close()
 
+	const serverReadTimeout = 60 * time.Second
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
 		}
+
+		// enforce a per-message read deadline so a slow peer can't hang us
+		_ = conn.SetReadDeadline(time.Now().Add(serverReadTimeout))
 
 		// read the request from connection
 		request, err := decode(conn)
@@ -493,6 +498,7 @@ func (s *Network) handleConn(ctx context.Context, rawConn net.Conn) {
 		}
 
 		// write the response
+		_ = conn.SetWriteDeadline(time.Now().Add(serverReadTimeout))
 		if _, err := conn.Write(response); err != nil {
 			logtrace.Error(ctx, "Write failed", logtrace.Fields{
 				logtrace.FieldModule: "p2p",
@@ -647,7 +653,8 @@ func (s *Network) Call(ctx context.Context, request *Message, isLong bool) (*Mes
 	if err != nil {
 		return nil, errors.Errorf("encode: %w", err)
 	}
-	if _, err := conn.Write(data); err != nil {
+	if _, werr := conn.Write(data); werr != nil {
+		err = werr
 		return nil, errors.Errorf("conn write: %w", err)
 	}
 
