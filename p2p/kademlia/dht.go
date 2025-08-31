@@ -399,11 +399,24 @@ func (s *DHT) Stats(ctx context.Context) (map[string]interface{}, error) {
 func (s *DHT) newMessage(messageType int, receiver *Node, data interface{}) *Message {
 	supernodeAddr := s.getCachedSupernodeAddress()
 	hostIP := parseSupernodeAddress(supernodeAddr)
+	logtrace.Info(context.TODO(), "", logtrace.Fields{
+		"host_ip":       hostIP,
+		"supernodeAddr": supernodeAddr,
+		"self ID":       s.ht.self.ID,
+		"self Port":     s.ht.self.Port,
+	})
 	sender := &Node{
 		IP:   hostIP,
 		ID:   s.ht.self.ID,
 		Port: s.ht.self.Port,
 	}
+	logtrace.Info(context.TODO(), "New message created", logtrace.Fields{
+		logtrace.FieldModule: "dht",
+		"message_type":       messageType,
+		"sender":             sender.String(),
+		"receiver":           receiver.String(),
+		"data":               fmt.Sprintf("%+v", data),
+	})
 	return &Message{
 		Sender:      sender,
 		Receiver:    receiver,
