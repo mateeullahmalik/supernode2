@@ -404,6 +404,13 @@ func (s *DHT) newMessage(messageType int, receiver *Node, data interface{}) *Mes
 		ID:   s.ht.self.ID,
 		Port: s.ht.self.Port,
 	}
+	logtrace.Info(context.TODO(), "New message created", logtrace.Fields{
+		logtrace.FieldModule: "dht",
+		"message_type":       messageType,
+		"sender":             sender.String(),
+		"receiver":           receiver.String(),
+		"data":               fmt.Sprintf("%+v", data),
+	})
 	return &Message{
 		Sender:      sender,
 		Receiver:    receiver,
