@@ -18,12 +18,12 @@ func NewGRPCLogger() grpclog.LoggerV2 {
 
 // Info logs at info level
 func (g *grpcLogger) Info(args ...any) {
-	Debug(context.Background(), fmt.Sprint(args...), Fields{"module": "grpc"}) // Suppress Internal Logs
+	Info(context.Background(), fmt.Sprint(args...), Fields{"module": "grpc"})
 }
 
 // Infof logs at info level with format
 func (g *grpcLogger) Infof(format string, args ...any) {
-	Debug(context.Background(), fmt.Sprintf(format, args...), Fields{"module": "grpc"})
+	Info(context.Background(), fmt.Sprintf(format, args...), Fields{"module": "grpc"})
 }
 
 // Infoln logs at info level with newline
@@ -82,7 +82,7 @@ func (g *grpcLogger) Fatalln(args ...any) {
 
 // V returns true if logging is enabled for the given verbosity level
 func (g *grpcLogger) V(l int) bool {
-	return l <= 1 // Only show error/warning levels by default
+	return true // Enable all verbosity levels
 }
 
 // SetGRPCLogger configures gRPC to use logtrace for internal logging
