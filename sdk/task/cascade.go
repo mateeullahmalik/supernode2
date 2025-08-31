@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	registrationTimeout = 5 * time.Minute  // Timeout for registration requests
+	registrationTimeout = 10 * time.Minute // Timeout for registration requests
 	connectionTimeout   = 10 * time.Second // Timeout for connection requests
 )
 
