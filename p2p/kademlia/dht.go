@@ -419,7 +419,7 @@ func (s *DHT) newMessage(messageType int, receiver *Node, data interface{}) *Mes
 		"message_type":       messageType,
 		"sender":             sender.String(),
 		"receiver":           receiver.String(),
-		"data":               fmt.Sprintf("%+v", data),
+		"data":               fmt.Sprintf("%.50s", fmt.Sprintf("%+v", data)),
 	})
 	return &Message{
 		Sender:      sender,
