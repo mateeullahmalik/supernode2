@@ -176,8 +176,8 @@ func (s *DHT) getSupernodeAddress(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to get supernode address: %w", err)
 	}
-	s.supernodeAddr = supernodeInfo.LatestAddress
-	return supernodeInfo.LatestAddress, nil
+	s.supernodeAddr = strings.TrimSpace(supernodeInfo.LatestAddress)
+	return s.supernodeAddr, nil
 }
 
 // getCachedSupernodeAddress returns cached supernode address without chain queries
@@ -194,18 +194,21 @@ func (s *DHT) getCachedSupernodeAddress() string {
 // parseSupernodeAddress extracts the host part from a URL or address string.
 // It handles http/https prefixes, optional ports, and raw host:port formats.
 func parseSupernodeAddress(address string) string {
+	// Always trim whitespace first
+	address = strings.TrimSpace(address)
+	
 	// If it looks like a URL, parse with net/url
 	if u, err := url.Parse(address); err == nil && u.Host != "" {
 		host, _, err := net.SplitHostPort(u.Host)
 		if err == nil {
-			return host
+			return strings.TrimSpace(host)
 		}
-		return u.Host // no port present
+		return strings.TrimSpace(u.Host) // no port present
 	}
 
-	// If it’s just host:port, handle with SplitHostPort
+	// If it's just host:port, handle with SplitHostPort
 	if host, _, err := net.SplitHostPort(address); err == nil {
-		return host
+		return strings.TrimSpace(host)
 	}
 
 	// Otherwise return as-is (probably just a bare host)
@@ -401,9 +404,9 @@ func (s *DHT) newMessage(messageType int, receiver *Node, data interface{}) *Mes
 	supernodeAddr := s.getCachedSupernodeAddress()
 	hostIP := parseSupernodeAddress(supernodeAddr)
 
-	// If fallback produced an invalid address (e.g., 0.0.0.0), do not advertise it.
+	// If fallback produced an invalid address (e.g., 0.0.0.0), use the node's configured IP
 	if ip := net.ParseIP(hostIP); ip == nil || ip.IsUnspecified() || ip.IsLoopback() || ip.IsPrivate() {
-		hostIP = ""
+		hostIP = s.ht.self.IP
 	}
 
 	sender := &Node{

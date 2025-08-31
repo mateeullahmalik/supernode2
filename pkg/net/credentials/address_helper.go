@@ -30,6 +30,8 @@ func (a LumeraAddress) HostPort() string {
 // Returns the identity and the standard address
 // If requireIdentity is true, an error is returned when identity is not found
 func ExtractIdentity(address string, requireIdentity ...bool) (string, string, error) {
+	// Always trim whitespace from the input address first
+	address = strings.TrimSpace(address)
 	parts := strings.SplitN(address, "@", 2)
 
 	// Check if identity is required
@@ -43,11 +45,11 @@ func ExtractIdentity(address string, requireIdentity ...bool) (string, string, e
 		if identityRequired {
 			return "", "", fmt.Errorf("identity required but not found in address: %s", address)
 		}
-		return "", address, nil
+		return "", strings.TrimSpace(address), nil
 	}
 
-	identity := parts[0]
-	standardAddress := parts[1]
+	identity := strings.TrimSpace(parts[0])
+	standardAddress := strings.TrimSpace(parts[1])
 
 	if identity == "" {
 		return "", "", fmt.Errorf("empty identity found in address: %s", address)
