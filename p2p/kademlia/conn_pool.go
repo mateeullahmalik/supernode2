@@ -33,8 +33,6 @@ func NewConnPool(ctx context.Context) *ConnPool {
 		conns:    map[string]*connectionItem{},
 	}
 
-	pool.StartConnEviction(ctx)
-
 	return pool
 }
 
@@ -116,41 +114,48 @@ type connWrapper struct {
 	mtx        sync.Mutex
 }
 
-// NewSecureClientConn do client handshake and return a secure connection
+// NewSecureClientConn does client handshake and returns a secure, pooled-ready connection.
 func NewSecureClientConn(ctx context.Context, tc credentials.TransportCredentials, remoteAddr string) (net.Conn, error) {
-	// Extract identity if in Lumera format
+	// Extract identity if in Lumera format (e.g., "<bech32>@ip:port")
 	remoteIdentity, remoteAddress, err := ltc.ExtractIdentity(remoteAddr, true)
 	if err != nil {
 		return nil, fmt.Errorf("invalid address format: %w", err)
 	}
 
-	lumeraTC, ok := tc.(*ltc.LumeraTC)
+	base, ok := tc.(*ltc.LumeraTC)
 	if !ok {
 		return nil, fmt.Errorf("invalid credentials type")
 	}
 
-	// Set remote identity in credentials
-	lumeraTC.SetRemoteIdentity(remoteIdentity)
+	// Per-connection clone; set remote identity on the clone only.
+	cloned, ok := base.Clone().(*ltc.LumeraTC)
+	if !ok {
+		return nil, fmt.Errorf("failed to clone LumeraTC")
+	}
+	cloned.SetRemoteIdentity(remoteIdentity)
 
-	// dial the remote address with tcp
-	var d net.Dialer
+	// Dial the remote address with a short timeout.
+	d := net.Dialer{
+		Timeout:   3 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
 	rawConn, err := d.DialContext(ctx, "tcp", remoteAddress)
-
 	if err != nil {
 		return nil, errors.Errorf("dial %q: %w", remoteAddress, err)
 	}
 
-	// set the deadline for read and write
-	rawConn.SetDeadline(time.Now().UTC().Add(defaultConnDeadline))
+	// Clear any global deadline; per-RPC deadlines are set in Network.Call.
+	_ = rawConn.SetDeadline(time.Time{})
 
-	conn, _, err := tc.ClientHandshake(ctx, "", rawConn)
+	// TLS/ALTS-ish client handshake using the per-connection cloned creds.
+	secureConn, _, err := cloned.ClientHandshake(ctx, "", rawConn)
 	if err != nil {
-		rawConn.Close()
+		_ = rawConn.Close()
 		return nil, errors.Errorf("client secure establish %q: %w", remoteAddress, err)
 	}
 
 	return &connWrapper{
-		secureConn: conn,
+		secureConn: secureConn,
 		rawConn:    rawConn,
 	}, nil
 }
@@ -223,32 +228,4 @@ func (conn *connWrapper) SetWriteDeadline(t time.Time) error {
 	conn.mtx.Lock()
 	defer conn.mtx.Unlock()
 	return conn.secureConn.SetWriteDeadline(t)
-}
-
-// StartConnEviction starts a goroutine that periodically evicts idle connections.
-func (pool *ConnPool) StartConnEviction(ctx context.Context) {
-	go func() {
-		ticker := time.NewTicker(time.Minute) // adjust as necessary
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ticker.C:
-				pool.mtx.Lock()
-
-				for addr, item := range pool.conns {
-					if time.Since(item.lastAccess) > defaultConnDeadline {
-						_ = item.conn.Close()
-						delete(pool.conns, addr)
-					}
-				}
-
-				pool.mtx.Unlock()
-
-			case <-ctx.Done():
-				// Stop the goroutine when the context is cancelled
-				return
-			}
-		}
-	}()
 }

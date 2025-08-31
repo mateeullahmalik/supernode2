@@ -8,6 +8,7 @@ import (
 	"math"
 	"net"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -399,6 +400,12 @@ func (s *DHT) Stats(ctx context.Context) (map[string]interface{}, error) {
 func (s *DHT) newMessage(messageType int, receiver *Node, data interface{}) *Message {
 	supernodeAddr := s.getCachedSupernodeAddress()
 	hostIP := parseSupernodeAddress(supernodeAddr)
+
+	// If fallback produced an invalid address (e.g., 0.0.0.0), do not advertise it.
+	if ip := net.ParseIP(hostIP); ip == nil || ip.IsUnspecified() || ip.IsLoopback() || ip.IsPrivate() {
+		hostIP = ""
+	}
+
 	sender := &Node{
 		IP:   hostIP,
 		ID:   s.ht.self.ID,
@@ -1270,6 +1277,13 @@ func (s *DHT) sendStoreData(ctx context.Context, n *Node, request *StoreDataRequ
 
 // add a node into the appropriate k bucket, return the removed node if it's full
 func (s *DHT) addNode(ctx context.Context, node *Node) *Node {
+	if node.IP == "" || node.IP == "0.0.0.0" || node.IP == "127.0.0.1" {
+		logtrace.Info(ctx, "Trying to add invalid node", logtrace.Fields{
+			logtrace.FieldModule: "p2p",
+		})
+		return nil
+	}
+
 	// ensure this is not itself address
 	if bytes.Equal(node.ID, s.ht.self.ID) {
 		logtrace.Info(ctx, "Trying to add itself", logtrace.Fields{
@@ -1524,6 +1538,26 @@ func (s *DHT) addKnownNodes(ctx context.Context, nodes []*Node, knownNodes map[s
 		if _, ok := knownNodes[string(node.ID)]; ok {
 			continue
 		}
+
+		// Reject bind/local/link-local/private/bogus addresses early
+		if ip := net.ParseIP(node.IP); ip != nil {
+			if ip.IsUnspecified() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+				s.ignorelist.IncrementCount(node)
+				continue
+			}
+			// If this overlay is public, also reject RFC1918/CGNAT:
+			if ip.IsPrivate() {
+				s.ignorelist.IncrementCount(node)
+				continue
+			}
+		} else {
+			// Hostname: basic sanity (must look like a FQDN)
+			if !strings.Contains(node.IP, ".") {
+				s.ignorelist.IncrementCount(node)
+				continue
+			}
+		}
+
 		node.SetHashedID()
 		knownNodes[string(node.ID)] = node
 
@@ -1717,7 +1751,14 @@ func (s *DHT) IterateBatchStore(ctx context.Context, values [][]byte, typ int, i
 
 func (s *DHT) batchStoreNetwork(ctx context.Context, values [][]byte, nodes map[string]*Node, storageMap map[string][]int, typ int) chan *MessageWithError {
 	responses := make(chan *MessageWithError, len(nodes))
-	semaphore := make(chan struct{}, 3) // Semaphore to limit concurrency to 3
+	maxStore := 16
+	if ln := len(nodes); ln < maxStore {
+		maxStore = ln
+	}
+	if maxStore < 1 {
+		maxStore = 1
+	}
+	semaphore := make(chan struct{}, maxStore)
 
 	var wg sync.WaitGroup
 
@@ -1794,7 +1835,14 @@ func (s *DHT) batchFindNode(ctx context.Context, payload [][]byte, nodes map[str
 	responses := make(chan *MessageWithError, len(nodes))
 	atleastOneContacted := false
 	var wg sync.WaitGroup
-	semaphore := make(chan struct{}, 20)
+	maxInFlight := 64
+	if ln := len(nodes); ln < maxInFlight {
+		maxInFlight = ln
+	}
+	if maxInFlight < 1 {
+		maxInFlight = 1
+	}
+	semaphore := make(chan struct{}, maxInFlight)
 
 	for _, node := range nodes {
 		if _, ok := contacted[string(node.ID)]; ok {
