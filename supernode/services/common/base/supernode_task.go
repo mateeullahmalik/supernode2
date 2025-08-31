@@ -24,12 +24,12 @@ type SuperNodeTask struct {
 // RunHelper common code for Task runner
 func (task *SuperNodeTask) RunHelper(ctx context.Context, clean TaskCleanerFunc) error {
 	ctx = task.context(ctx)
-	logtrace.Debug(ctx, "Start task", logtrace.Fields{})
+	logtrace.Info(ctx, "Start task", logtrace.Fields{})
 	defer logtrace.Info(ctx, "Task canceled", logtrace.Fields{})
 	defer task.Cancel()
 
 	task.SetStatusNotifyFunc(func(status *state.Status) {
-		logtrace.Debug(ctx, "States updated", logtrace.Fields{"status": status.String()})
+		logtrace.Info(ctx, "States updated", logtrace.Fields{"status": status.String()})
 	})
 
 	defer clean()
@@ -53,9 +53,9 @@ func (task *SuperNodeTask) context(ctx context.Context) context.Context {
 // RemoveFile removes file from FS (TODO: move to gonode.common)
 func (task *SuperNodeTask) RemoveFile(file *files.File) {
 	if file != nil {
-		logtrace.Debug(context.Background(), "remove file", logtrace.Fields{"filename": file.Name()})
+		logtrace.Info(context.Background(), "remove file", logtrace.Fields{"filename": file.Name()})
 		if err := file.Remove(); err != nil {
-			logtrace.Debug(context.Background(), "remove file failed", logtrace.Fields{logtrace.FieldError: err.Error()})
+			logtrace.Info(context.Background(), "remove file failed", logtrace.Fields{logtrace.FieldError: err.Error()})
 		}
 	}
 }
