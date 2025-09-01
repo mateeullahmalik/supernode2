@@ -60,8 +60,6 @@ type Network struct {
 	connPool    *ConnPool
 	connPoolMtx sync.Mutex
 	sem         *semaphore.Weighted
-
-	inflight map[string]*sync.Mutex
 }
 
 // NewNetwork returns a network service
@@ -74,7 +72,6 @@ func NewNetwork(ctx context.Context, dht *DHT, self *Node, clientTC, serverTC cr
 		serverTC: serverTC,
 		connPool: NewConnPool(ctx),
 		sem:      semaphore.NewWeighted(maxConcurrentFindBatchValsRequests),
-		inflight: make(map[string]*sync.Mutex),
 	}
 	// init the rate limiter
 	s.limiter = ratelimit.New(defaultConnRate)
@@ -122,18 +119,7 @@ func (s *Network) Stop(ctx context.Context) {
 	}
 }
 
-// rpcMu returns a per-remote mutex (one in-flight RPC per remote).
-func (s *Network) rpcMu(key string) *sync.Mutex {
-	s.connPoolMtx.Lock()
-	defer s.connPoolMtx.Unlock()
-	mu, ok := s.inflight[key]
-	if !ok {
-		mu = &sync.Mutex{}
-		s.inflight[key] = mu
-	}
-
-	return mu
-}
+// (removed inflight per-remote mutex; per-connection serialization is handled by connWrapper)
 
 func (s *Network) encodeMesage(mesage *Message) ([]byte, error) {
 	// send the response to client

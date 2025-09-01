@@ -45,6 +45,12 @@ func (pool *ConnPool) Add(addr string, conn net.Conn) {
 	if item, ok := pool.conns[addr]; ok {
 		// close the old connection
 		_ = item.conn.Close()
+		// replace in-place without triggering capacity eviction
+		pool.conns[addr] = &connectionItem{
+			lastAccess: time.Now().UTC(),
+			conn:       conn,
+		}
+		return
 	}
 
 	// if connection not in pool
