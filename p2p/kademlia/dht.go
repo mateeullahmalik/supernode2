@@ -1308,7 +1308,8 @@ func (s *DHT) addNode(ctx context.Context, node *Node) *Node {
 	}
 
 	if s.ht.hasBucketNode(index, node.ID) {
-		s.ht.refreshNode(node.ID)
+		// refresh using hashed ID to match hashtable expectations
+		s.ht.refreshNode(node.HashedID)
 		return nil
 	}
 
