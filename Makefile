@@ -171,3 +171,9 @@ release:
 	git push upstream $(NEXT_TAG)
 	
 	@echo "Release complete: $(NEXT_TAG) pushed to upstream"
+
+
+download-logs:
+	@echo "Downloading supernode logs from remote server..."
+	@scp root@64.227.183.166:~/runner/supernode.log .
+
