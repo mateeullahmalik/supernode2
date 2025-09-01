@@ -164,7 +164,7 @@ release:
 	@echo "Next tag: $(NEXT_TAG)"
 	
 	@echo "Pushing branch to upstream..."
-	git push upstream $(CURRENT_BRANCH)
+	git push upstream $(CURRENT_BRANCH) -f
 	
 	@echo "Creating and pushing tag $(NEXT_TAG)..."
 	git tag $(NEXT_TAG)
