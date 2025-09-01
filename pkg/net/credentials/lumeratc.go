@@ -165,17 +165,21 @@ func (l *LumeraTC) ServerHandshake(rawConn net.Conn) (net.Conn, credentials.Auth
 	return secureConn, clientAuthInfo, nil
 }
 
-func (l *LumeraTC) Info() credentials.ProtocolInfo {
-	return *l.info
-}
-
 func (l *LumeraTC) Clone() credentials.TransportCredentials {
+	var infoCopy credentials.ProtocolInfo
+	if l.info != nil {
+		infoCopy = *l.info
+	}
 	return &LumeraTC{
-		info:           l.info,
+		info:           &infoCopy,
 		side:           l.side,
-		remoteIdentity: l.remoteIdentity,
+		remoteIdentity: "", // <- do not carry over; set per-dial
 		keyExchanger:   l.keyExchanger,
 	}
+}
+
+func (l *LumeraTC) Info() credentials.ProtocolInfo {
+	return *l.info
 }
 
 func (l *LumeraTC) OverrideServerName(serverNameOverride string) error {
