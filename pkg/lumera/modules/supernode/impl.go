@@ -125,3 +125,12 @@ func (m *module) GetSupernodeWithLatestAddress(ctx context.Context, address stri
 		CurrentState:     currentState,
 	}, nil
 }
+
+// ListSuperNodes retrieves all supernodes
+func (m *module) ListSuperNodes(ctx context.Context) (*types.QueryListSuperNodesResponse, error) {
+    resp, err := m.client.ListSuperNodes(ctx, &types.QueryListSuperNodesRequest{})
+    if err != nil {
+        return nil, fmt.Errorf("failed to list supernodes: %w", err)
+    }
+    return resp, nil
+}
