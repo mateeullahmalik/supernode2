@@ -221,18 +221,8 @@ func (ht *HashTable) closestContacts(num int, target []byte, ignoredNodes []*Nod
 	ht.mutex.RLock()
 	defer ht.mutex.RUnlock()
 
-<<<<<<< HEAD
-	// Ensure target is hashed for consistent distance comparisons
-	var hashedTarget []byte
-	if len(target) != 32 {
-		hashedTarget, _ = utils.Blake3Hash(target)
-	} else {
-		hashedTarget = target
-	}
-=======
 	// Normalize target into hashed ID space (32 bytes)
 	hashedTarget := ensureHashedTarget(target)
->>>>>>> cb2ceab (P2P  enchancements)
 
 	// Convert ignoredNodes slice to a map for faster lookup
 	ignoredMap := make(map[string]bool)
@@ -240,13 +230,7 @@ func (ht *HashTable) closestContacts(num int, target []byte, ignoredNodes []*Nod
 		ignoredMap[string(node.ID)] = true
 	}
 
-<<<<<<< HEAD
-	nl := &NodeList{
-		Comparator: hashedTarget,
-	}
-=======
 	nl := &NodeList{Comparator: hashedTarget}
->>>>>>> cb2ceab (P2P  enchancements)
 
 	counter := 0
 	// Flatten the routeTable and add nodes to nl if they're not in the ignoredMap
@@ -334,30 +318,15 @@ func (ht *HashTable) closestContactsWithInlcudingNode(num int, target []byte, ig
 	ht.mutex.RLock()
 	defer ht.mutex.RUnlock()
 
-<<<<<<< HEAD
-	var hashedTarget []byte
-	if len(target) != 32 {
-		hashedTarget, _ = utils.Blake3Hash(target)
-	} else {
-		hashedTarget = target
-	}
-=======
 	// Normalize target into hashed ID space (32 bytes)
 	hashedTarget := ensureHashedTarget(target)
->>>>>>> cb2ceab (P2P  enchancements)
 	// Convert ignoredNodes slice to a map for faster lookup
 	ignoredMap := make(map[string]bool)
 	for _, node := range ignoredNodes {
 		ignoredMap[string(node.ID)] = true
 	}
 
-<<<<<<< HEAD
-	nl := &NodeList{
-		Comparator: hashedTarget,
-	}
-=======
 	nl := &NodeList{Comparator: hashedTarget}
->>>>>>> cb2ceab (P2P  enchancements)
 
 	// Flatten the routeTable and add nodes to nl if they're not in the ignoredMap
 	for _, bucket := range ht.routeTable {

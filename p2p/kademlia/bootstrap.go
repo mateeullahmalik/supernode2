@@ -115,86 +115,6 @@ func (s *DHT) ConfigureBootstrapNodes(ctx context.Context, bootstrapNodes string
 
 	var validatedBootstrapNodes []*Node
 
-<<<<<<< HEAD
-	// Get the latest block to determine height
-	latestBlockResp, err := s.options.LumeraClient.Node().GetLatestBlock(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get latest block: %w", err)
-	}
-
-	// Get the block height
-	blockHeight := uint64(latestBlockResp.SdkBlock.Header.Height)
-
-	// Get top supernodes for this block
-	supernodeResp, err := s.options.LumeraClient.SuperNode().GetTopSuperNodesForBlock(ctx, blockHeight)
-	if err != nil {
-		return fmt.Errorf("failed to get top supernodes: %w", err)
-	}
-
-	mapNodes := map[string]*Node{}
-
-	for _, supernode := range supernodeResp.Supernodes {
-		// Find the latest IP address (with highest block height)
-		var latestIP string
-		var maxHeight int64 = -1
-
-		for _, ipHistory := range supernode.PrevIpAddresses {
-			if ipHistory.Height > maxHeight {
-				maxHeight = ipHistory.Height
-				latestIP = ipHistory.Address
-			}
-		}
-
-		if latestIP == "" {
-			logtrace.Warn(ctx, "No valid IP address found for supernode", logtrace.Fields{
-				logtrace.FieldModule: "p2p",
-				"supernode":          supernode.SupernodeAccount,
-			})
-			continue
-		}
-
-		// Extract IP from the address (remove port if present)
-		ip := parseSupernodeAddress(latestIP)
-
-		// Use p2p_port from supernode record
-		p2pPort := defaultSuperNodeP2PPort
-		if supernode.P2PPort != "" {
-			if port, err := strconv.ParseUint(supernode.P2PPort, 10, 16); err == nil {
-				p2pPort = int(port)
-			}
-		}
-
-		// Create full address with p2p port for validation
-		fullAddress := fmt.Sprintf("%s:%d", ip, p2pPort)
-
-		// Parse the node from the full address
-		node, err := s.parseNode(fullAddress, selfAddress)
-		if err != nil {
-			logtrace.Warn(ctx, "Skip Bad Bootstrap Address", logtrace.Fields{
-				logtrace.FieldModule: "p2p",
-				logtrace.FieldError:  err.Error(),
-				"address":            fullAddress,
-				"supernode":          supernode.SupernodeAccount,
-			})
-			continue
-		}
-
-		// Store the supernode account as the node ID
-		node.ID = []byte(supernode.SupernodeAccount)
-		mapNodes[fullAddress] = node
-	}
-
-	// Convert the map to a slice
-	for _, node := range mapNodes {
-		hID, _ := utils.Blake3Hash(node.ID)
-		node.HashedID = hID
-		logtrace.Debug(ctx, "node adding", logtrace.Fields{
-			logtrace.FieldModule: "p2p",
-			"node":               node.String(),
-			"hashed_id":          string(node.HashedID),
-		})
-		boostrapNodes = append(boostrapNodes, node)
-=======
 	// // Get the latest block to determine height
 	// latestBlockResp, err := s.options.LumeraClient.Node().GetLatestBlock(ctx)
 	// if err != nil {
@@ -210,7 +130,6 @@ func (s *DHT) ConfigureBootstrapNodes(ctx context.Context, bootstrapNodes string
 	supernodeResp, err := s.options.LumeraClient.SuperNode().ListSuperNodes(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get top supernodes: %w", err)
->>>>>>> cb2ceab (P2P  enchancements)
 	}
 
 	mapNodes := make(map[string]*Node, len(supernodeResp.Supernodes))

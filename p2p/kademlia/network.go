@@ -646,10 +646,6 @@ func (s *Network) Call(ctx context.Context, request *Message, isLong bool) (*Mes
 	if err != nil {
 		return nil, errors.Errorf("encode: %w", err)
 	}
-<<<<<<< HEAD
-	if _, werr := conn.Write(data); werr != nil {
-		err = werr
-=======
 
 	// If it's our wrapper, lock the whole RPC
 	if cw, ok := conn.(*connWrapper); ok {
@@ -706,7 +702,6 @@ func (s *Network) Call(ctx context.Context, request *Message, isLong bool) (*Mes
 		_ = conn.Close()
 		s.connPool.Del(remoteAddr)
 		s.connPoolMtx.Unlock()
->>>>>>> cb2ceab (P2P  enchancements)
 		return nil, errors.Errorf("conn write: %w", err)
 	}
 	if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {

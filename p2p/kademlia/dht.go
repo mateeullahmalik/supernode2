@@ -8,11 +8,8 @@ import (
 	"math"
 	"net"
 	"net/url"
-<<<<<<< HEAD
-=======
 	"os"
 	"strings"
->>>>>>> cb2ceab (P2P  enchancements)
 	"sync"
 	"sync/atomic"
 	"time"
@@ -223,24 +220,8 @@ func (s *DHT) getSupernodeAddress(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to get supernode address: %w", err)
 	}
-<<<<<<< HEAD
-	s.supernodeAddr = supernodeInfo.LatestAddress
-	return supernodeInfo.LatestAddress, nil
-=======
 	s.supernodeAddr = strings.TrimSpace(supernodeInfo.LatestAddress)
 	return s.supernodeAddr, nil
-}
-
-// getCachedSupernodeAddress returns cached supernode address without chain queries
-func (s *DHT) getCachedSupernodeAddress() string {
-	s.mtx.RLock()
-	defer s.mtx.RUnlock()
-
-	if s.supernodeAddr != "" {
-		return s.supernodeAddr
-	}
-	return s.ht.self.IP // fallback without chain query
->>>>>>> cb2ceab (P2P  enchancements)
 }
 
 // getCachedSupernodeAddress returns cached supernode address without chain queries
@@ -296,8 +277,6 @@ func (s *DHT) Start(ctx context.Context) error {
 		})
 	}
 
-<<<<<<< HEAD
-=======
 	// Bootstrap ignore list from persisted replication info (inactive nodes)
 	if err := s.bootstrapIgnoreList(ctx); err != nil {
 		logtrace.Warn(ctx, "Failed to bootstrap ignore list", logtrace.Fields{
@@ -306,7 +285,6 @@ func (s *DHT) Start(ctx context.Context) error {
 		})
 	}
 
->>>>>>> cb2ceab (P2P  enchancements)
 	go s.StartReplicationWorker(ctx)
 	go s.startDisabledKeysCleanupWorker(ctx)
 	go s.startCleanupRedundantDataWorker(ctx)
@@ -1385,12 +1363,8 @@ func (s *DHT) addNode(ctx context.Context, node *Node) *Node {
 	}
 
 	if s.ht.hasBucketNode(index, node.ID) {
-<<<<<<< HEAD
-		s.ht.refreshNode(node.ID)
-=======
 		// refresh using hashed ID to match hashtable expectations
 		s.ht.refreshNode(node.HashedID)
->>>>>>> cb2ceab (P2P  enchancements)
 		return nil
 	}
 
@@ -1675,21 +1649,6 @@ func (s *DHT) IterateBatchStore(ctx context.Context, values [][]byte, typ int, i
 		s.addKnownNodes(ctx, top6.Nodes, knownNodes)
 	}
 
-<<<<<<< HEAD
-	var changed bool
-	var i int
-	for {
-		i++
-		logtrace.Info(ctx, "Iterate batch store begin", logtrace.Fields{
-			logtrace.FieldModule: "dht",
-			"task_id":            id,
-			"iter":               i,
-			"keys":               len(values),
-		})
-		changed = false
-		localClosestNodes := make(map[string]*NodeList)
-		responses, atleastOneContacted := s.batchFindNode(ctx, hashes, knownNodes, contacted, id)
-=======
 	// var changed bool
 	// var i int
 	// for {
@@ -1703,7 +1662,6 @@ func (s *DHT) IterateBatchStore(ctx context.Context, values [][]byte, typ int, i
 	// 	changed = false
 	// 	localClosestNodes := make(map[string]*NodeList)
 	// 	responses, atleastOneContacted := s.batchFindNode(ctx, hashes, knownNodes, contacted, id)
->>>>>>> cb2ceab (P2P  enchancements)
 
 	// 	if !atleastOneContacted {
 	// 		logtrace.Info(ctx, "Break", logtrace.Fields{
