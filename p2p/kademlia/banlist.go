@@ -12,8 +12,9 @@ const (
 	// banDuration - ban duration
 	banDuration = 3 * time.Hour
 
-	// threshold - threshold
-	threshold = 3
+	// threshold - number of failures required to consider a node banned.
+	// Set to 0 so a single failure (count starts at 1) is enough to ban.
+	threshold = 0
 )
 
 // BanNode is the over-the-wire representation of a node
@@ -33,6 +34,14 @@ type BanList struct {
 func (s *BanList) Add(node *Node) {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
+
+	// If already exists, just increment count instead of duplicating
+	for i := range s.Nodes {
+		if bytes.Equal(s.Nodes[i].ID, node.ID) {
+			s.Nodes[i].count++
+			return
+		}
+	}
 
 	banNode := BanNode{
 		Node: Node{
@@ -82,13 +91,16 @@ func (s *BanList) Banned(node *Node) bool {
 	s.mtx.RLock()
 	defer s.mtx.RUnlock()
 
+	maxCount := -1
 	for _, item := range s.Nodes {
 		if bytes.Equal(item.ID, node.ID) {
-			return item.count > threshold
+			if item.count > maxCount {
+				maxCount = item.count
+			}
 		}
 	}
 
-	return false
+	return maxCount > threshold
 }
 
 // Exists return true if the node is already there
@@ -110,18 +122,13 @@ func (s *BanList) Delete(node *Node) {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 
-	l := len(s.Nodes)
-	for i := 0; i < l; i++ {
-		if bytes.Equal(s.Nodes[i].ID, node.ID) {
-			newNodes := s.Nodes[:i]
-			if i+1 < l {
-				newNodes = append(newNodes, s.Nodes[i+1:]...)
-			}
-			s.Nodes = newNodes
-
-			return
+	filtered := s.Nodes[:0]
+	for _, it := range s.Nodes {
+		if !bytes.Equal(it.ID, node.ID) {
+			filtered = append(filtered, it)
 		}
 	}
+	s.Nodes = filtered
 }
 
 // Purge removes all expired nodes from the ban list
@@ -178,6 +185,19 @@ func (s *BanList) ToNodeList() []*Node {
 func (s *BanList) AddWithCreatedAt(node *Node, createdAt time.Time, count int) {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
+
+	// If exists, update in-place using the stronger ban and earliest createdAt
+	for i := range s.Nodes {
+		if bytes.Equal(s.Nodes[i].ID, node.ID) {
+			if createdAt.Before(s.Nodes[i].CreatedAt) {
+				s.Nodes[i].CreatedAt = createdAt
+			}
+			if count > s.Nodes[i].count {
+				s.Nodes[i].count = count
+			}
+			return
+		}
+	}
 
 	banNode := BanNode{
 		Node: Node{

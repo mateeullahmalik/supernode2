@@ -3,6 +3,7 @@ package kademlia
 import (
 	"context"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -112,24 +113,26 @@ func (s *DHT) ConfigureBootstrapNodes(ctx context.Context, bootstrapNodes string
 	}
 	selfAddress := fmt.Sprintf("%s:%d", parseSupernodeAddress(supernodeAddr), s.options.Port)
 
-	var boostrapNodes []*Node
+	var validatedBootstrapNodes []*Node
 
-	// Get the latest block to determine height
-	latestBlockResp, err := s.options.LumeraClient.Node().GetLatestBlock(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get latest block: %w", err)
-	}
+	// // Get the latest block to determine height
+	// latestBlockResp, err := s.options.LumeraClient.Node().GetLatestBlock(ctx)
+	// if err != nil {
+	// 	return fmt.Errorf("failed to get latest block: %w", err)
+	// }
 
-	// Get the block height
-	blockHeight := uint64(latestBlockResp.SdkBlock.Header.Height)
+	// // Get the block height
+	// blockHeight := uint64(latestBlockResp.SdkBlock.Header.Height)
 
 	// Get top supernodes for this block
-	supernodeResp, err := s.options.LumeraClient.SuperNode().GetTopSuperNodesForBlock(ctx, blockHeight)
+
+	// Get all supernodes
+	supernodeResp, err := s.options.LumeraClient.SuperNode().ListSuperNodes(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get top supernodes: %w", err)
 	}
 
-	mapNodes := map[string]*Node{}
+	mapNodes := make(map[string]*Node, len(supernodeResp.Supernodes))
 
 	for _, supernode := range supernodeResp.Supernodes {
 		// Find the latest IP address (with highest block height)
@@ -182,26 +185,91 @@ func (s *DHT) ConfigureBootstrapNodes(ctx context.Context, bootstrapNodes string
 		mapNodes[fullAddress] = node
 	}
 
-	// Convert the map to a slice
-	for _, node := range mapNodes {
-		hID, _ := utils.Blake3Hash(node.ID)
-		node.HashedID = hID
-		logtrace.Debug(ctx, "node adding", logtrace.Fields{
-			logtrace.FieldModule: "p2p",
-			"node":               node.String(),
-			"hashed_id":          string(node.HashedID),
-		})
-		boostrapNodes = append(boostrapNodes, node)
+	// Concurrently TCP-ping all candidate nodes and keep only responsive ones
+	{
+		const (
+			concurrency = 64
+			dialTimeout = 2 * time.Second
+		)
+
+		// preallocate with an upper bound
+		validatedBootstrapNodes = make([]*Node, 0, len(mapNodes))
+
+		type task struct {
+			addr string
+			node *Node
+		}
+
+		jobs := make(chan task, len(mapNodes))
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+
+		workers := concurrency
+		if len(mapNodes) < workers {
+			workers = len(mapNodes)
+		}
+
+		worker := func() {
+			defer wg.Done()
+			d := net.Dialer{Timeout: dialTimeout}
+            for t := range jobs {
+                // Per-node short timeout dial with context
+                perCtx, cancel := context.WithTimeout(ctx, dialTimeout)
+                conn, err := d.DialContext(perCtx, "tcp", t.addr)
+                cancel()
+                if err != nil {
+                    // Mark address as temporarily bad to avoid immediate retries
+                    s.cache.SetWithExpiry(t.addr, []byte("true"), badAddrExpiryHours*time.Hour)
+                    // Record failure to ignorelist counter
+                    s.ignorelist.IncrementCount(t.node)
+                    logtrace.Debug(ctx, "bootstrap tcp ping failed", logtrace.Fields{
+                        logtrace.FieldModule: "p2p",
+                        logtrace.FieldError:  err.Error(),
+                        "addr":               t.addr,
+                    })
+                    continue
+                }
+                _ = conn.Close()
+
+                // Responsive: compute hash and queue for inclusion
+                hID, _ := utils.Blake3Hash(t.node.ID)
+                t.node.HashedID = hID
+                // Node is responsive; ensure it's not kept in ignorelist
+                s.ignorelist.Delete(t.node)
+                mu.Lock()
+                validatedBootstrapNodes = append(validatedBootstrapNodes, t.node)
+                mu.Unlock()
+            }
+        }
+
+		// start workers
+		wg.Add(workers)
+		for i := 0; i < workers; i++ {
+			go worker()
+		}
+
+        // enqueue tasks, skipping nodes currently banned in ignorelist
+        for addr, node := range mapNodes {
+            if s.ignorelist.Banned(node) {
+                // keep also marking bad to avoid immediate retry
+                s.cache.SetWithExpiry(addr, []byte("true"), badAddrExpiryHours*time.Hour)
+                continue
+            }
+            jobs <- task{addr: addr, node: node}
+        }
+        close(jobs)
+
+		wg.Wait()
 	}
 
-	if len(boostrapNodes) == 0 {
+	if len(validatedBootstrapNodes) == 0 {
 		logtrace.Error(ctx, "unable to fetch bootstrap IP addresses. No valid supernodes found.", logtrace.Fields{
 			logtrace.FieldModule: "p2p",
 		})
 		return nil
 	}
 
-	for _, node := range boostrapNodes {
+	for _, node := range validatedBootstrapNodes {
 		logtrace.Info(ctx, "adding p2p bootstrap node", logtrace.Fields{
 			logtrace.FieldModule: "p2p",
 			"bootstap_ip":        node.IP,
@@ -210,7 +278,7 @@ func (s *DHT) ConfigureBootstrapNodes(ctx context.Context, bootstrapNodes string
 		})
 	}
 
-	s.options.BootstrapNodes = append(s.options.BootstrapNodes, boostrapNodes...)
+	s.options.BootstrapNodes = append(s.options.BootstrapNodes, validatedBootstrapNodes...)
 
 	return nil
 }

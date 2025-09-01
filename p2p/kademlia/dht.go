@@ -64,6 +64,49 @@ type DHT struct {
 	rqstore        rqstore.Store
 }
 
+// bootstrapIgnoreList seeds the in-memory ignore list with nodes that are
+// currently marked inactive in the replication info store so we avoid
+// contacting them during initial bootstrap. This does not fail the Start.
+func (s *DHT) bootstrapIgnoreList(ctx context.Context) error {
+    if s.store == nil {
+        return nil
+    }
+
+    infos, err := s.store.GetAllReplicationInfo(ctx)
+    if err != nil {
+        return fmt.Errorf("get replication info: %w", err)
+    }
+    if len(infos) == 0 {
+        return nil
+    }
+
+    added := 0
+    for _, info := range infos {
+        if info.Active {
+            continue
+        }
+        // Seed as banned by setting count above threshold; use UpdatedAt as createdAt basis
+        n := &Node{ID: info.ID, IP: info.IP, Port: info.Port}
+        createdAt := info.UpdatedAt
+        if createdAt.IsZero() && info.LastSeen != nil {
+            createdAt = *info.LastSeen
+        }
+        if createdAt.IsZero() {
+            createdAt = time.Now().UTC()
+        }
+        s.ignorelist.AddWithCreatedAt(n, createdAt, threshold+1)
+        added++
+    }
+
+    if added > 0 {
+        logtrace.Info(ctx, "Ignore list bootstrapped from replication info", logtrace.Fields{
+            logtrace.FieldModule: "p2p",
+            "ignored_count":      added,
+        })
+    }
+    return nil
+}
+
 // Options contains configuration options for the queries node
 type Options struct {
 	ID []byte
@@ -196,7 +239,7 @@ func (s *DHT) getCachedSupernodeAddress() string {
 func parseSupernodeAddress(address string) string {
 	// Always trim whitespace first
 	address = strings.TrimSpace(address)
-	
+
 	// If it looks like a URL, parse with net/url
 	if u, err := url.Parse(address); err == nil && u.Host != "" {
 		host, _, err := net.SplitHostPort(u.Host)
@@ -217,23 +260,31 @@ func parseSupernodeAddress(address string) string {
 
 // Start the distributed hash table
 func (s *DHT) Start(ctx context.Context) error {
-	// start the network
-	if err := s.network.Start(ctx); err != nil {
-		return fmt.Errorf("start network: %v", err)
-	}
+    // start the network
+    if err := s.network.Start(ctx); err != nil {
+        return fmt.Errorf("start network: %v", err)
+    }
 
 	// Pre-fetch supernode address with generous timeout to avoid chain queries during message creation
 	initCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	if _, err := s.getSupernodeAddress(initCtx); err != nil {
-		logtrace.Warn(ctx, "Failed to pre-fetch supernode address, will use fallback", logtrace.Fields{
-			logtrace.FieldModule: "p2p",
-			logtrace.FieldError:  err.Error(),
-		})
-	}
+    if _, err := s.getSupernodeAddress(initCtx); err != nil {
+        logtrace.Warn(ctx, "Failed to pre-fetch supernode address, will use fallback", logtrace.Fields{
+            logtrace.FieldModule: "p2p",
+            logtrace.FieldError:  err.Error(),
+        })
+    }
 
-	go s.StartReplicationWorker(ctx)
+    // Bootstrap ignore list from persisted replication info (inactive nodes)
+    if err := s.bootstrapIgnoreList(ctx); err != nil {
+        logtrace.Warn(ctx, "Failed to bootstrap ignore list", logtrace.Fields{
+            logtrace.FieldModule: "p2p",
+            logtrace.FieldError:  err.Error(),
+        })
+    }
+
+    go s.StartReplicationWorker(ctx)
 	go s.startDisabledKeysCleanupWorker(ctx)
 	go s.startCleanupRedundantDataWorker(ctx)
 	go s.startDeleteDataWorker(ctx)
@@ -1334,12 +1385,13 @@ func (s *DHT) addNode(ctx context.Context, node *Node) *Node {
 			bucket = append(bucket, node)
 			s.ht.routeTable[index] = bucket
 			return nil
-		} else {
+        } else {
 
-			s.ignorelist.IncrementCount(node)
-			// the node is down, remove the node from bucket
-			bucket = append(bucket, node)
-			bucket = bucket[1:]
+            // Penalize the unresponsive resident, not the new candidate
+            s.ignorelist.IncrementCount(first)
+            // the node is down, remove the node from bucket
+            bucket = append(bucket, node)
+            bucket = bucket[1:]
 
 			// need to reset the route table with the bucket
 			s.ht.routeTable[index] = bucket
@@ -1574,7 +1626,7 @@ func (s *DHT) addKnownNodes(ctx context.Context, nodes []*Node, knownNodes map[s
 func (s *DHT) IterateBatchStore(ctx context.Context, values [][]byte, typ int, id string) error {
 	globalClosestContacts := make(map[string]*NodeList)
 	knownNodes := make(map[string]*Node)
-	contacted := make(map[string]bool)
+	// contacted := make(map[string]bool)
 	hashes := make([][]byte, len(values))
 
 	logtrace.Info(ctx, "Iterate batch store begin", logtrace.Fields{
@@ -1593,92 +1645,92 @@ func (s *DHT) IterateBatchStore(ctx context.Context, values [][]byte, typ int, i
 		s.addKnownNodes(ctx, top6.Nodes, knownNodes)
 	}
 
-	var changed bool
-	var i int
-	for {
-		i++
-		logtrace.Info(ctx, "Iterate batch store begin", logtrace.Fields{
-			logtrace.FieldModule: "dht",
-			"task_id":            id,
-			"iter":               i,
-			"keys":               len(values),
-		})
-		changed = false
-		localClosestNodes := make(map[string]*NodeList)
-		responses, atleastOneContacted := s.batchFindNode(ctx, hashes, knownNodes, contacted, id)
+	// var changed bool
+	// var i int
+	// for {
+	// 	i++
+	// 	logtrace.Info(ctx, "Iterate batch store begin", logtrace.Fields{
+	// 		logtrace.FieldModule: "dht",
+	// 		"task_id":            id,
+	// 		"iter":               i,
+	// 		"keys":               len(values),
+	// 	})
+	// 	changed = false
+	// 	localClosestNodes := make(map[string]*NodeList)
+	// 	responses, atleastOneContacted := s.batchFindNode(ctx, hashes, knownNodes, contacted, id)
 
-		if !atleastOneContacted {
-			logtrace.Info(ctx, "Break", logtrace.Fields{
-				logtrace.FieldModule: "dht",
-			})
-			break
-		}
+	// 	if !atleastOneContacted {
+	// 		logtrace.Info(ctx, "Break", logtrace.Fields{
+	// 			logtrace.FieldModule: "dht",
+	// 		})
+	// 		break
+	// 	}
 
-		for response := range responses {
-			if response.Error != nil {
-				logtrace.Error(ctx, "Batch find node failed on a node", logtrace.Fields{
-					logtrace.FieldModule: "dht",
-					"task_id":            id,
-					logtrace.FieldError:  response.Error.Error(),
-				})
-				continue
-			}
+	// 	for response := range responses {
+	// 		if response.Error != nil {
+	// 			logtrace.Error(ctx, "Batch find node failed on a node", logtrace.Fields{
+	// 				logtrace.FieldModule: "dht",
+	// 				"task_id":            id,
+	// 				logtrace.FieldError:  response.Error.Error(),
+	// 			})
+	// 			continue
+	// 		}
 
-			if response.Message == nil {
-				continue
-			}
+	// 		if response.Message == nil {
+	// 			continue
+	// 		}
 
-			v, ok := response.Message.Data.(*BatchFindNodeResponse)
-			if ok && v.Status.Result == ResultOk {
-				for key, nodesList := range v.ClosestNodes {
-					if nodesList != nil {
-						nl, exists := localClosestNodes[key]
-						if exists {
-							nl.AddNodes(nodesList)
-							localClosestNodes[key] = nl
-						} else {
-							localClosestNodes[key] = &NodeList{Nodes: nodesList, Comparator: base58.Decode(key)}
-						}
+	// 		v, ok := response.Message.Data.(*BatchFindNodeResponse)
+	// 		if ok && v.Status.Result == ResultOk {
+	// 			for key, nodesList := range v.ClosestNodes {
+	// 				if nodesList != nil {
+	// 					nl, exists := localClosestNodes[key]
+	// 					if exists {
+	// 						nl.AddNodes(nodesList)
+	// 						localClosestNodes[key] = nl
+	// 					} else {
+	// 						localClosestNodes[key] = &NodeList{Nodes: nodesList, Comparator: base58.Decode(key)}
+	// 					}
 
-						s.addKnownNodes(ctx, nodesList, knownNodes)
-					}
-				}
-			}
-		}
+	// 					s.addKnownNodes(ctx, nodesList, knownNodes)
+	// 				}
+	// 			}
+	// 		}
+	// 	}
 
-		// we now need to check if the nodes in the globalClosestContacts Map are still in the top 6
-		// if yes, we can store the data to them
-		// if not, we need to send calls to the newly found nodes to inquire about the top 6 nodes
-		logtrace.Info(ctx, "Check closest nodes & begin store", logtrace.Fields{
-			logtrace.FieldModule: "dht",
-			"task_id":            id,
-			"iter":               i,
-			"keys":               len(values),
-		})
-		for key, nodesList := range localClosestNodes {
-			if nodesList == nil {
-				continue
-			}
+	// 	// we now need to check if the nodes in the globalClosestContacts Map are still in the top 6
+	// 	// if yes, we can store the data to them
+	// 	// if not, we need to send calls to the newly found nodes to inquire about the top 6 nodes
+	// 	logtrace.Info(ctx, "Check closest nodes & begin store", logtrace.Fields{
+	// 		logtrace.FieldModule: "dht",
+	// 		"task_id":            id,
+	// 		"iter":               i,
+	// 		"keys":               len(values),
+	// 	})
+	// 	for key, nodesList := range localClosestNodes {
+	// 		if nodesList == nil {
+	// 			continue
+	// 		}
 
-			nodesList.Comparator = base58.Decode(key)
-			nodesList.Sort()
-			nodesList.TopN(Alpha)
-			s.addKnownNodes(ctx, nodesList.Nodes, knownNodes)
+	// 		nodesList.Comparator = base58.Decode(key)
+	// 		nodesList.Sort()
+	// 		nodesList.TopN(Alpha)
+	// 		s.addKnownNodes(ctx, nodesList.Nodes, knownNodes)
 
-			if !haveAllNodes(nodesList.Nodes, globalClosestContacts[key].Nodes) {
-				changed = true
-			}
+	// 		if !haveAllNodes(nodesList.Nodes, globalClosestContacts[key].Nodes) {
+	// 			changed = true
+	// 		}
 
-			nodesList.AddNodes(globalClosestContacts[key].Nodes)
-			nodesList.Sort()
-			nodesList.TopN(Alpha)
-			globalClosestContacts[key] = nodesList
-		}
+	// 		nodesList.AddNodes(globalClosestContacts[key].Nodes)
+	// 		nodesList.Sort()
+	// 		nodesList.TopN(Alpha)
+	// 		globalClosestContacts[key] = nodesList
+	// 	}
 
-		if !changed {
-			break
-		}
-	}
+	// 	if !changed {
+	// 		break
+	// 	}
+	// }
 
 	// assume at this point, we have True\Golabl top 6 nodes for each symbol's hash stored in globalClosestContacts Map
 	// we now need to store the data to these nodes

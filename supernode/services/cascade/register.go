@@ -3,7 +3,6 @@ package cascade
 import (
 	"context"
 	"os"
-	"time"
 
 	"github.com/LumeraProtocol/supernode/v2/pkg/logtrace"
 	"github.com/LumeraProtocol/supernode/v2/supernode/services/common"
@@ -48,8 +47,8 @@ func (task *CascadeRegistrationTask) Register(
 
 	// Use a server-owned context for long-running operations (storage/finalization)
 	// to avoid being bound to the gRPC stream deadline/cancellation.
-	taskCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
+	// taskCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	// defer cancel()
 
 	fields := logtrace.Fields{logtrace.FieldMethod: "Register", logtrace.FieldRequest: req}
 	logtrace.Info(ctx, "cascade-action-registration request received", fields)
@@ -153,7 +152,7 @@ func (task *CascadeRegistrationTask) Register(
 	/* 10. Persist artefacts -------------------------------------------------------- */
 	// Store artefacts (ID files + symbols) using task-scoped context so it can
 	// proceed even if the client disconnects/cancels the stream.
-	if err := task.storeArtefacts(taskCtx, action.ActionID, rqidResp.RedundantMetadataFiles, encResp.SymbolsDir, fields); err != nil {
+	if err := task.storeArtefacts(ctx, action.ActionID, rqidResp.RedundantMetadataFiles, encResp.SymbolsDir, fields); err != nil {
 		return err
 	}
 	logtrace.Info(ctx, "artefacts have been stored", fields)
@@ -161,7 +160,7 @@ func (task *CascadeRegistrationTask) Register(
 
 	// Finalize on-chain using the task context as well, to avoid premature
 	// cancellation from the client stream context.
-	resp, err := task.LumeraClient.FinalizeAction(taskCtx, action.ActionID, rqidResp.RQIDs)
+	resp, err := task.LumeraClient.FinalizeAction(ctx, action.ActionID, rqidResp.RQIDs)
 	if err != nil {
 		fields[logtrace.FieldError] = err.Error()
 		logtrace.Info(ctx, "Finalize Action Error", fields)
