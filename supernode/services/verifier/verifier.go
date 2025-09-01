@@ -37,7 +37,7 @@ func (cv *ConfigVerifier) VerifyConfig(ctx context.Context) (*VerificationResult
 		Warnings: []ConfigError{},
 	}
 
-	logtrace.Debug(ctx, "Starting config verification", logtrace.Fields{
+	logtrace.Info(ctx, "Starting config verification", logtrace.Fields{
 		"identity": cv.config.SupernodeConfig.Identity,
 		"key_name": cv.config.SupernodeConfig.KeyName,
 		"p2p_port": cv.config.P2PConfig.Port,

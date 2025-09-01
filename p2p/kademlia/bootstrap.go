@@ -212,35 +212,35 @@ func (s *DHT) ConfigureBootstrapNodes(ctx context.Context, bootstrapNodes string
 		worker := func() {
 			defer wg.Done()
 			d := net.Dialer{Timeout: dialTimeout}
-            for t := range jobs {
-                // Per-node short timeout dial with context
-                perCtx, cancel := context.WithTimeout(ctx, dialTimeout)
-                conn, err := d.DialContext(perCtx, "tcp", t.addr)
-                cancel()
-                if err != nil {
-                    // Mark address as temporarily bad to avoid immediate retries
-                    s.cache.SetWithExpiry(t.addr, []byte("true"), badAddrExpiryHours*time.Hour)
-                    // Record failure to ignorelist counter
-                    s.ignorelist.IncrementCount(t.node)
-                    logtrace.Debug(ctx, "bootstrap tcp ping failed", logtrace.Fields{
-                        logtrace.FieldModule: "p2p",
-                        logtrace.FieldError:  err.Error(),
-                        "addr":               t.addr,
-                    })
-                    continue
-                }
-                _ = conn.Close()
+			for t := range jobs {
+				// Per-node short timeout dial with context
+				perCtx, cancel := context.WithTimeout(ctx, dialTimeout)
+				conn, err := d.DialContext(perCtx, "tcp", t.addr)
+				cancel()
+				if err != nil {
+					// Mark address as temporarily bad to avoid immediate retries
+					s.cache.SetWithExpiry(t.addr, []byte("true"), badAddrExpiryHours*time.Hour)
+					// Record failure to ignorelist counter
+					s.ignorelist.IncrementCount(t.node)
+					logtrace.Info(ctx, "bootstrap tcp ping failed", logtrace.Fields{
+						logtrace.FieldModule: "p2p",
+						logtrace.FieldError:  err.Error(),
+						"addr":               t.addr,
+					})
+					continue
+				}
+				_ = conn.Close()
 
-                // Responsive: compute hash and queue for inclusion
-                hID, _ := utils.Blake3Hash(t.node.ID)
-                t.node.HashedID = hID
-                // Node is responsive; ensure it's not kept in ignorelist
-                s.ignorelist.Delete(t.node)
-                mu.Lock()
-                validatedBootstrapNodes = append(validatedBootstrapNodes, t.node)
-                mu.Unlock()
-            }
-        }
+				// Responsive: compute hash and queue for inclusion
+				hID, _ := utils.Blake3Hash(t.node.ID)
+				t.node.HashedID = hID
+				// Node is responsive; ensure it's not kept in ignorelist
+				s.ignorelist.Delete(t.node)
+				mu.Lock()
+				validatedBootstrapNodes = append(validatedBootstrapNodes, t.node)
+				mu.Unlock()
+			}
+		}
 
 		// start workers
 		wg.Add(workers)
@@ -248,16 +248,16 @@ func (s *DHT) ConfigureBootstrapNodes(ctx context.Context, bootstrapNodes string
 			go worker()
 		}
 
-        // enqueue tasks, skipping nodes currently banned in ignorelist
-        for addr, node := range mapNodes {
-            if s.ignorelist.Banned(node) {
-                // keep also marking bad to avoid immediate retry
-                s.cache.SetWithExpiry(addr, []byte("true"), badAddrExpiryHours*time.Hour)
-                continue
-            }
-            jobs <- task{addr: addr, node: node}
-        }
-        close(jobs)
+		// enqueue tasks, skipping nodes currently banned in ignorelist
+		for addr, node := range mapNodes {
+			if s.ignorelist.Banned(node) {
+				// keep also marking bad to avoid immediate retry
+				s.cache.SetWithExpiry(addr, []byte("true"), badAddrExpiryHours*time.Hour)
+				continue
+			}
+			jobs <- task{addr: addr, node: node}
+		}
+		close(jobs)
 
 		wg.Wait()
 	}
@@ -336,20 +336,20 @@ func (s *DHT) Bootstrap(ctx context.Context, bootstrapNodes string) error {
 					// Mark this address as temporarily bad to avoid retrying immediately
 					s.cache.SetWithExpiry(addr, []byte("true"), badAddrExpiryHours*time.Hour)
 
-					logtrace.Debug(ctx, "network call failed, sleeping 3 seconds", logtrace.Fields{
+					logtrace.Info(ctx, "network call failed, sleeping 3 seconds", logtrace.Fields{
 						logtrace.FieldModule: "p2p",
 						logtrace.FieldError:  err.Error(),
 					})
 					time.Sleep(5 * time.Second)
 					continue
 				}
-				logtrace.Debug(ctx, "ping response", logtrace.Fields{
+				logtrace.Info(ctx, "ping response", logtrace.Fields{
 					logtrace.FieldModule: "p2p",
 					"response":           response.String(),
 				})
 
 				// add the node to the route table
-				logtrace.Debug(ctx, "add-node params", logtrace.Fields{
+				logtrace.Info(ctx, "add-node params", logtrace.Fields{
 					logtrace.FieldModule: "p2p",
 					"sender-id":          string(response.Sender.ID),
 					"sender-ip":          string(response.Sender.IP),

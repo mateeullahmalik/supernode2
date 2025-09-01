@@ -35,12 +35,12 @@ func (cl *client) Connect(ctx context.Context, address string) (Connection, erro
 		return nil, errors.Errorf("fail to dial: %w", err).WithField("address", address)
 	}
 
-	logtrace.Debug(ctx, "Connected to address with max recv size 35 MB", logtrace.Fields{logtrace.FieldModule: "dd", "address": address})
+	logtrace.Info(ctx, "Connected to address with max recv size 35 MB", logtrace.Fields{logtrace.FieldModule: "dd", "address": address})
 
 	conn := newClientConn(id, grpcConn)
 	go func() {
 		//<-conn.Done() // FIXME: to be implemented by new gRPC package
-		logtrace.Debug(ctx, "Disconnected", logtrace.Fields{logtrace.FieldModule: "dd", "target": grpcConn.Target()})
+		logtrace.Info(ctx, "Disconnected", logtrace.Fields{logtrace.FieldModule: "dd", "target": grpcConn.Target()})
 	}()
 	return conn, nil
 }

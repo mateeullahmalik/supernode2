@@ -39,7 +39,7 @@ func (s *DHT) checkNodeActivity(ctx context.Context) {
 					// invoke the request and handle the response
 					_, err := s.network.Call(ctx, request, false)
 					if err != nil {
-						logtrace.Debug(ctx, "failed to ping node", logtrace.Fields{
+						logtrace.Info(ctx, "failed to ping node", logtrace.Fields{
 							logtrace.FieldModule: "p2p",
 							logtrace.FieldError:  err.Error(),
 							"ip":                 info.IP,

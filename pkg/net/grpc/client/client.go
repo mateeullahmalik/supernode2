@@ -280,7 +280,7 @@ func (ch *defaultConnectionHandler) attemptConnection(ctx context.Context, targe
 		return nil, fmt.Errorf("connection failed: %w", err)
 	}
 
-	logtrace.Debug(ctx, "Connected to gRPC server", logtrace.Fields{"target": target})
+	logtrace.Info(ctx, "Connected to gRPC server", logtrace.Fields{"target": target})
 	return gclient, nil
 }
 
@@ -304,10 +304,10 @@ func (ch *defaultConnectionHandler) retryConnection(ctx context.Context, address
 		// Wait before retry, respecting context cancellation
 		select {
 		case <-ctx.Done():
-			logtrace.Debug(ctx, "Connection attempt cancelled", logtrace.Fields{"address": address, "retries": retries + 1})
+			logtrace.Info(ctx, "Connection attempt cancelled", logtrace.Fields{"address": address, "retries": retries + 1})
 			return nil, ctx.Err()
 		case <-time.After(opts.RetryWaitTime):
-			logtrace.Debug(ctx, "Retrying connection", logtrace.Fields{"address": address, "attempt": retries + 1})
+			logtrace.Info(ctx, "Retrying connection", logtrace.Fields{"address": address, "attempt": retries + 1})
 			continue
 		}
 	}

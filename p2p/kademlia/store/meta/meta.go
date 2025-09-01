@@ -310,13 +310,13 @@ func (s *Store) deleteRecord(key []byte) {
 
 	res, err := s.db.Exec("DELETE FROM disabled_keys WHERE key = ?", hkey)
 	if err != nil {
-		logtrace.Debug(context.Background(), fmt.Sprintf("cannot delete disabled keys record by key %s: %v", hkey, err), logtrace.Fields{logtrace.FieldModule: "p2p"})
+		logtrace.Info(context.Background(), fmt.Sprintf("cannot delete disabled keys record by key %s: %v", hkey, err), logtrace.Fields{logtrace.FieldModule: "p2p"})
 	}
 
 	if rowsAffected, err := res.RowsAffected(); err != nil {
-		logtrace.Debug(context.Background(), fmt.Sprintf("failed to delete disabled key record by key %s: %v", hkey, err), logtrace.Fields{logtrace.FieldModule: "p2p"})
+		logtrace.Info(context.Background(), fmt.Sprintf("failed to delete disabled key record by key %s: %v", hkey, err), logtrace.Fields{logtrace.FieldModule: "p2p"})
 	} else if rowsAffected == 0 {
-		logtrace.Debug(context.Background(), fmt.Sprintf("failed to delete disabled key record by key %s", hkey), logtrace.Fields{logtrace.FieldModule: "p2p"})
+		logtrace.Info(context.Background(), fmt.Sprintf("failed to delete disabled key record by key %s", hkey), logtrace.Fields{logtrace.FieldModule: "p2p"})
 	}
 }
 

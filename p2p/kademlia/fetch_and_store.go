@@ -109,7 +109,7 @@ func (s *DHT) FetchAndStore(ctx context.Context) error {
 
 // BatchFetchAndStoreFailedKeys fetches all failed keys from the queries TODO replicate list, fetches value from respective nodes and stores them in the queries store
 func (s *DHT) BatchFetchAndStoreFailedKeys(ctx context.Context) error {
-	logtrace.Debug(ctx, "Getting failed batch fetch and store keys", logtrace.Fields{})
+	logtrace.Info(ctx, "Getting failed batch fetch and store keys", logtrace.Fields{})
 	keys, err := s.store.GetAllToDoRepKeys(maxBatchAttempts+1, failedKeysClosestContactsLookupCount+maxBatchAttempts+1) // 2 - 14
 	if err != nil {
 		return fmt.Errorf("get all keys error: %w", err)
@@ -155,7 +155,7 @@ func (s *DHT) BatchFetchAndStoreFailedKeys(ctx context.Context) error {
 
 // BatchFetchAndStore fetches all keys from the queries TODO replicate list, fetches value from respective nodes and stores them in the queries store
 func (s *DHT) BatchFetchAndStore(ctx context.Context) error {
-	logtrace.Debug(ctx, "Getting batch fetch and store keys", logtrace.Fields{})
+	logtrace.Info(ctx, "Getting batch fetch and store keys", logtrace.Fields{})
 	keys, err := s.store.GetAllToDoRepKeys(0, maxBatchAttempts)
 	if err != nil {
 		return fmt.Errorf("get all keys error: %w", err)
@@ -323,7 +323,7 @@ func (s *DHT) GetBatchValuesFromNode(ctx context.Context, keys []string, n *Node
 	bo.Multiplier = 1
 
 	if err := backoff.Retry(operation, bo); err != nil {
-		logtrace.Debug(ctx, fmt.Sprintf("network call request %s failed", request.String()), logtrace.Fields{logtrace.FieldModule: "p2p", logtrace.FieldError: err})
+		logtrace.Info(ctx, fmt.Sprintf("network call request %s failed", request.String()), logtrace.Fields{logtrace.FieldModule: "p2p", logtrace.FieldError: err})
 		return false, nil, nil, fmt.Errorf("network call request %s failed: %w", request.String(), err)
 	}
 

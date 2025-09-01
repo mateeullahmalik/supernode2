@@ -244,7 +244,7 @@ func (s *Store) GetKeysForReplication(ctx context.Context, from time.Time, to ti
 	var results []domain.KeyWithTimestamp
 	query := `SELECT key, createdAt FROM data WHERE createdAt > ? AND createdAt < ? ORDER BY createdAt ASC`
 
-	logtrace.Debug(ctx, "fetching keys for replication", logtrace.Fields{
+	logtrace.Info(ctx, "fetching keys for replication", logtrace.Fields{
 		logtrace.FieldModule: "p2p",
 		"from_time":          from,
 		"to_time":            to,
@@ -257,7 +257,7 @@ func (s *Store) GetKeysForReplication(ctx context.Context, from time.Time, to ti
 		return nil
 	}
 
-	logtrace.Debug(ctx, "Successfully fetched keys for replication", logtrace.Fields{
+	logtrace.Info(ctx, "Successfully fetched keys for replication", logtrace.Fields{
 		logtrace.FieldModule: "p2p",
 		"keys_count":         len(results),
 	})
