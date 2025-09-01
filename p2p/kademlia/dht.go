@@ -56,7 +56,7 @@ type DHT struct {
 	metaStore      MetaStore        // the meta storage of DHT
 	done           chan struct{}    // distributed hash table is done
 	cache          storage.KeyValue // store bad bootstrap addresses
-	bsConnected    map[string]bool  // map of connected bootstrap nodes [identity] -> connected
+	bsConnected    *sync.Map        // map of connected bootstrap nodes [identity] -> connected
 	supernodeAddr  string           // cached address from chain
 	mtx            sync.RWMutex
 	ignorelist     *BanList
@@ -144,7 +144,7 @@ func NewDHT(ctx context.Context, store Store, metaStore MetaStore, options *Opti
 		options:        options,
 		done:           make(chan struct{}),
 		cache:          memory.NewKeyValue(),
-		bsConnected:    make(map[string]bool),
+		bsConnected:    &sync.Map{},
 		ignorelist:     NewBanList(ctx),
 		replicationMtx: sync.RWMutex{},
 		rqstore:        rqstore,

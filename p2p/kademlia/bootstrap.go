@@ -298,9 +298,12 @@ func (s *DHT) Bootstrap(ctx context.Context, bootstrapNodes string) error {
 	for _, node := range s.options.BootstrapNodes {
 		nodeId := string(node.ID)
 		// sync the bootstrap node only once
-		isConnected, exists := s.bsConnected[nodeId]
-		if exists && isConnected {
-			continue
+		val, exists := s.bsConnected.Load(nodeId)
+		if exists {
+			isConnected, _ := val.(bool)
+			if isConnected {
+				continue
+			}
 		}
 
 		addr := fmt.Sprintf("%s:%v", node.IP, node.Port)
@@ -313,7 +316,7 @@ func (s *DHT) Bootstrap(ctx context.Context, bootstrapNodes string) error {
 		}
 
 		node := node
-		s.bsConnected[nodeId] = false
+		s.bsConnected.Store(nodeId, false)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -363,7 +366,7 @@ func (s *DHT) Bootstrap(ctx context.Context, bootstrapNodes string) error {
 					continue
 				}
 
-				s.bsConnected[nodeId] = true
+				s.bsConnected.Store(nodeId, true)
 				s.addNode(ctx, response.Sender)
 				break
 			}
