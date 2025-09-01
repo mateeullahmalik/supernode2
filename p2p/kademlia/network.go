@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -628,9 +629,9 @@ func (s *Network) Call(ctx context.Context, request *Message, isLong bool) (*Mes
 		return nil, errors.New("secure transport credentials are not set")
 	}
 
-	// build a safe pool key (avoid raw bytes)
-	idStr := base58.Encode(request.Receiver.ID)
-	remoteAddr := fmt.Sprintf("%s@%s:%d", idStr, request.Receiver.IP, request.Receiver.Port)
+	// build a safe pool key (use bech32 identity format for handshaker compatibility)
+	idStr := string(request.Receiver.ID)
+	remoteAddr := fmt.Sprintf("%s@%s:%d", idStr, strings.TrimSpace(request.Receiver.IP), request.Receiver.Port)
 
 	// try get from pool
 	s.connPoolMtx.Lock()
