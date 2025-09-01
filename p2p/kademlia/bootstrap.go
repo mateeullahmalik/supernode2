@@ -216,6 +216,24 @@ func (s *DHT) ConfigureBootstrapNodes(ctx context.Context, bootstrapNodes string
 	mapNodes := make(map[string]*Node, len(supernodeResp.Supernodes))
 
 	for _, supernode := range supernodeResp.Supernodes {
+		// Skip non-active supernodes - find latest state by height
+		if len(supernode.States) == 0 {
+			continue
+		}
+		
+		var latestState int32 = 0
+		var maxStateHeight int64 = -1
+		for _, state := range supernode.States {
+			if state.Height > maxStateHeight {
+				maxStateHeight = state.Height
+				latestState = int32(state.State)
+			}
+		}
+		
+		if latestState != 1 { // SuperNodeStateActive = 1
+			continue
+		}
+		
 		// Find the latest IP address (with highest block height)
 		var latestIP string
 		var maxHeight int64 = -1
