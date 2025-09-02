@@ -3,11 +3,10 @@ module github.com/LumeraProtocol/supernode/v2/sn-manager
 go 1.24.1
 
 require (
-	github.com/AlecAivazis/survey/v2 v2.3.7
-	github.com/LumeraProtocol/supernode/v2 v2.0.0-00010101000000-000000000000
-	github.com/spf13/cobra v1.8.1
-	go.uber.org/mock v0.5.2
-	gopkg.in/yaml.v3 v3.0.1
+    github.com/AlecAivazis/survey/v2 v2.3.7
+    github.com/LumeraProtocol/supernode/v2 v2.0.0-00010101000000-000000000000
+    github.com/spf13/cobra v1.8.1
+    gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

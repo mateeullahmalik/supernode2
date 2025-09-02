@@ -6,11 +6,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/LumeraProtocol/supernode/v2/sn-manager/internal/config"
 	"github.com/LumeraProtocol/supernode/v2/sn-manager/internal/github"
+	"github.com/LumeraProtocol/supernode/v2/sn-manager/internal/utils"
 	"github.com/LumeraProtocol/supernode/v2/sn-manager/internal/version"
 	"github.com/spf13/cobra"
 )
@@ -32,46 +32,39 @@ All unrecognized flags are passed through to the supernode init command.`,
 
 type initFlags struct {
 	force          bool
-	checkInterval  int
 	autoUpgrade    bool
 	nonInteractive bool
 	supernodeArgs  []string
 }
 
 func parseInitFlags(args []string) *initFlags {
-    flags := &initFlags{
-        checkInterval: config.DefaultUpdateCheckInterval,
-        autoUpgrade:   true,
-    }
+	flags := &initFlags{
+		autoUpgrade: true,
+	}
 
-    // Parse flags and filter out sn-manager specific ones
-    for i := 0; i < len(args); i++ {
-        switch args[i] {
-        case "--check-interval":
-            if i+1 < len(args) {
-                fmt.Sscanf(args[i+1], "%d", &flags.checkInterval)
-                i++ // Skip the value
-            }
-        case "--auto-upgrade":
-            // Allow --auto-upgrade or --auto-upgrade=true/false
-            if i+1 < len(args) && (args[i+1] == "true" || args[i+1] == "false") {
-                flags.autoUpgrade = (args[i+1] == "true")
-                i++
-            } else {
-                flags.autoUpgrade = true
-            }
-        case "--force":
-            flags.force = true
-        case "-y", "--yes":
-            flags.nonInteractive = true
-            // Pass through to supernode as well
-            flags.supernodeArgs = append(flags.supernodeArgs, args[i])
+	// Parse flags and filter out sn-manager specific ones
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--auto-upgrade":
+			// Allow --auto-upgrade or --auto-upgrade=true/false
+			if i+1 < len(args) && (args[i+1] == "true" || args[i+1] == "false") {
+				flags.autoUpgrade = (args[i+1] == "true")
+				i++
+			} else {
+				flags.autoUpgrade = true
+			}
+		case "--force":
+			flags.force = true
+		case "-y", "--yes":
+			flags.nonInteractive = true
+			// Pass through to supernode as well
+			flags.supernodeArgs = append(flags.supernodeArgs, args[i])
 
-        default:
-            // Pass all other args to supernode
-            flags.supernodeArgs = append(flags.supernodeArgs, args[i])
-        }
-    }
+		default:
+			// Pass all other args to supernode
+			flags.supernodeArgs = append(flags.supernodeArgs, args[i])
+		}
+	}
 
 	return flags
 }
@@ -97,25 +90,7 @@ func promptForManagerConfig(flags *initFlags) error {
 	}
 	flags.autoUpgrade = (autoUpgradeChoice == autoUpgradeOptions[0])
 
-	// Check interval prompt (only if auto-upgrade is enabled)
-	if flags.autoUpgrade {
-		var intervalStr string
-		inputPrompt := &survey.Input{
-			Message: "Update check interval (seconds):",
-			Default: fmt.Sprintf("%d", config.DefaultUpdateCheckInterval),
-			Help:    fmt.Sprintf("How often to check for updates (%d = 1 hour)", config.DefaultUpdateCheckInterval),
-		}
-		if err := survey.AskOne(inputPrompt, &intervalStr); err != nil {
-			return err
-		}
-		interval, err := strconv.Atoi(intervalStr)
-		if err != nil || interval < 60 {
-			fmt.Printf("Invalid interval, using default (%d)\n", config.DefaultUpdateCheckInterval)
-			flags.checkInterval = config.DefaultUpdateCheckInterval
-		} else {
-			flags.checkInterval = interval
-		}
-	}
+	// No interval prompt; check interval is fixed at 10 minutes.
 
 	return nil
 }
@@ -163,8 +138,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// Create config with values
 	cfg := &config.Config{
 		Updates: config.UpdateConfig{
-			CheckInterval: flags.checkInterval,
-			AutoUpgrade:   flags.autoUpgrade,
+			AutoUpgrade: flags.autoUpgrade,
 		},
 	}
 
@@ -175,7 +149,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("✓ sn-manager initialized\n")
 	if cfg.Updates.AutoUpgrade {
-		fmt.Printf("  Auto-upgrade: enabled (every %d seconds)\n", cfg.Updates.CheckInterval)
+		fmt.Printf("  Auto-upgrade: enabled (checks every 10 minutes)\n")
 	}
 
 	// Step 2: Download latest SuperNode binary
@@ -197,30 +171,39 @@ func runInit(cmd *cobra.Command, args []string) error {
 	if versionMgr.IsVersionInstalled(targetVersion) {
 		fmt.Printf("✓ SuperNode %s already installed, skipping download\n", targetVersion)
 	} else {
-		// Get download URL
-		downloadURL, err := client.GetSupernodeDownloadURL(targetVersion)
+		// Download combined tarball and extract supernode from it
+		tarURL, err := client.GetReleaseTarballURL(targetVersion)
 		if err != nil {
-			return fmt.Errorf("failed to get download URL: %w", err)
+			return fmt.Errorf("failed to get tarball URL: %w", err)
 		}
+		downloadsDir := filepath.Join(managerHome, "downloads")
+		if err := os.MkdirAll(downloadsDir, 0755); err != nil {
+			return fmt.Errorf("failed to create downloads dir: %w", err)
+		}
+		tarPath := filepath.Join(downloadsDir, fmt.Sprintf("release-%s.tar.gz", targetVersion))
+		// Download tarball if not already present
+		if _, statErr := os.Stat(tarPath); os.IsNotExist(statErr) {
+			progress, done := newDownloadProgressPrinter()
+			if err := utils.DownloadFile(tarURL, tarPath, progress); err != nil {
+				return fmt.Errorf("failed to download tarball: %w", err)
+			}
+			done()
+		}
+		defer os.Remove(tarPath)
 
-		// Download to temp file
-		tempFile := filepath.Join(managerHome, "downloads", fmt.Sprintf("supernode-%s.tmp", targetVersion))
-
-        // Download with progress
-        progress, done := newDownloadProgressPrinter()
-        if err := client.DownloadBinary(downloadURL, tempFile, progress); err != nil {
-            return fmt.Errorf("failed to download binary: %w", err)
-        }
-        done()
+		// Extract supernode binary to temp path
+		tempSN := filepath.Join(downloadsDir, fmt.Sprintf("supernode-%s.tmp", targetVersion))
+		if err := utils.ExtractFileFromTarGz(tarPath, "supernode", tempSN); err != nil {
+			return fmt.Errorf("failed to extract supernode: %w", err)
+		}
 
 		// Install the version
-		if err := versionMgr.InstallVersion(targetVersion, tempFile); err != nil {
+		if err := versionMgr.InstallVersion(targetVersion, tempSN); err != nil {
+			os.Remove(tempSN)
 			return fmt.Errorf("failed to install version: %w", err)
 		}
-
-		// Clean up temp file
-		if err := os.Remove(tempFile); err != nil && !os.IsNotExist(err) {
-			log.Printf("Warning: failed to remove temp file: %v", err)
+		if err := os.Remove(tempSN); err != nil && !os.IsNotExist(err) {
+			log.Printf("Warning: failed to remove temp supernode: %v", err)
 		}
 	}
 
@@ -250,7 +233,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 		// Pass through user-provided arguments to supernode init
 		supernodeArgs := append([]string{"init"}, flags.supernodeArgs...)
-		
+
 		supernodeCmd := exec.Command(supernodeBinary, supernodeArgs...)
 		supernodeCmd.Stdout = os.Stdout
 		supernodeCmd.Stderr = os.Stderr
