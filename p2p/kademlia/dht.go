@@ -456,9 +456,20 @@ func (s *DHT) newMessage(messageType int, receiver *Node, data interface{}) *Mes
 	supernodeAddr := s.getCachedSupernodeAddress()
 	hostIP := parseSupernodeAddress(supernodeAddr)
 
-	// If fallback produced an invalid address (e.g., 0.0.0.0), use the node's configured IP
+	// If fallback produced an invalid address (e.g., 0.0.0.0), choose a safe sender IP
 	if ip := net.ParseIP(hostIP); ip == nil || ip.IsUnspecified() || ip.IsLoopback() || ip.IsPrivate() {
-		hostIP = s.ht.self.IP
+		// Prefer valid self IP; in integration tests, allow loopback and private
+		isIntegrationTest := os.Getenv("INTEGRATION_TEST") == "true"
+		if sip := net.ParseIP(s.ht.self.IP); sip != nil {
+			if !sip.IsUnspecified() && (isIntegrationTest || (!sip.IsLoopback() && !sip.IsPrivate())) {
+				hostIP = s.ht.self.IP
+			} else if isIntegrationTest {
+				// Default to localhost when running local tests and no valid external IP
+				hostIP = "127.0.0.1"
+			}
+		} else if isIntegrationTest {
+			hostIP = "127.0.0.1"
+		}
 	}
 
 	sender := &Node{
@@ -1334,7 +1345,7 @@ func (s *DHT) sendStoreData(ctx context.Context, n *Node, request *StoreDataRequ
 func (s *DHT) addNode(ctx context.Context, node *Node) *Node {
 	// Allow localhost for integration testing
 	isIntegrationTest := os.Getenv("INTEGRATION_TEST") == "true"
-	
+
 	if node.IP == "" || node.IP == "0.0.0.0" || (!isIntegrationTest && node.IP == "127.0.0.1") {
 		logtrace.Info(ctx, "Trying to add invalid node", logtrace.Fields{
 			logtrace.FieldModule: "p2p",
@@ -1600,21 +1611,26 @@ func (s *DHT) addKnownNodes(ctx context.Context, nodes []*Node, knownNodes map[s
 		}
 
 		// Reject bind/local/link-local/private/bogus addresses early
+		// Allow loopback/private addresses during integration testing
+		isIntegrationTest := os.Getenv("INTEGRATION_TEST") == "true"
 		if ip := net.ParseIP(node.IP); ip != nil {
-			if ip.IsUnspecified() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			// Always reject unspecified. For integration tests, allow loopback/link-local.
+			if ip.IsUnspecified() || (!isIntegrationTest && (ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast())) {
 				s.ignorelist.IncrementCount(node)
 				continue
 			}
-			// If this overlay is public, also reject RFC1918/CGNAT:
-			if ip.IsPrivate() {
+			// If this overlay is public, also reject RFC1918/CGNAT. Allow during integration tests.
+			if !isIntegrationTest && ip.IsPrivate() {
 				s.ignorelist.IncrementCount(node)
 				continue
 			}
 		} else {
 			// Hostname: basic sanity (must look like a FQDN)
 			if !strings.Contains(node.IP, ".") {
-				s.ignorelist.IncrementCount(node)
-				continue
+				if !(isIntegrationTest && strings.EqualFold(node.IP, "localhost")) {
+					s.ignorelist.IncrementCount(node)
+					continue
+				}
 			}
 		}
 

@@ -1,3 +1,5 @@
+# Note: During tests, local loopback/localhost is allowed by the P2P layer
+# when INTEGRATION_TEST=true (set by tests). No change needed here.
 #hope bulk clever tip road female fly quiz once dose journey sting hedgehog pull area envelope supreme maze project spike brave shed fish live
 # Supernode Configuration
 supernode:

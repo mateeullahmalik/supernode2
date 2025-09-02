@@ -32,8 +32,8 @@ jobs:
       - name: Setup Go and system deps
         uses: ./.github/actions/setup-env  
       
-      # - name: Run integration tests
-        # run: go test -v ./tests/integration/...
+      - name: Run integration tests
+        run: go test -v ./tests/integration/...
 
   cascade-e2e-tests:
     name: cascade-e2e-tests
@@ -53,8 +53,8 @@ jobs:
       - name: Setup Supernode environments
         run: make setup-supernodes
       
-      # - name: Run cascade e2e tests
-        # run: make test-cascade
+      - name: Run cascade e2e tests
+        run: make test-cascade
 
   # sn-manager-e2e-tests:
   #   name: sn-manager-e2e-tests
