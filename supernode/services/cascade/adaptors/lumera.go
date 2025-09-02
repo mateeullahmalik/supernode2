@@ -2,6 +2,7 @@ package adaptors
 
 import (
 	"context"
+	"fmt"
 
 	actiontypes "github.com/LumeraProtocol/lumera/x/action/v1/types"
 	sntypes "github.com/LumeraProtocol/lumera/x/supernode/v1/types"
@@ -44,7 +45,26 @@ func (c *Client) GetActionFee(ctx context.Context, dataSize string) (*actiontype
 }
 
 func (c *Client) FinalizeAction(ctx context.Context, actionID string, rqids []string) (*sdktx.BroadcastTxResponse, error) {
-	return c.lc.ActionMsg().FinalizeCascadeAction(ctx, actionID, rqids)
+	resp, err := c.lc.ActionMsg().FinalizeCascadeAction(ctx, actionID, rqids)
+	if err != nil {
+		// Preserve underlying gRPC status/details
+		return nil, fmt.Errorf("finalize cascade action broadcast failed: %w", err)
+	}
+
+	// Surface chain-level failures (non-zero code) with rich context
+	if resp != nil && resp.TxResponse != nil && resp.TxResponse.Code != 0 {
+		return nil, fmt.Errorf(
+			"tx failed: code=%d codespace=%s height=%d gas_wanted=%d gas_used=%d raw_log=%s",
+			resp.TxResponse.Code,
+			resp.TxResponse.Codespace,
+			resp.TxResponse.Height,
+			resp.TxResponse.GasWanted,
+			resp.TxResponse.GasUsed,
+			resp.TxResponse.RawLog,
+		)
+	}
+
+	return resp, nil
 }
 
 func (c *Client) GetTopSupernodes(ctx context.Context, height uint64) (*sntypes.QueryGetTopSuperNodesForBlockResponse, error) {
