@@ -63,6 +63,9 @@ func (u *AutoUpdater) Start(ctx context.Context) {
 	interval := time.Duration(u.config.Updates.CheckInterval) * time.Second
 	u.ticker = time.NewTicker(interval)
 
+	// Run an immediate check on startup so restarts don't wait a full interval
+	u.checkAndUpdateCombined()
+
 	go func() {
 		for {
 			select {
@@ -218,7 +221,14 @@ func (u *AutoUpdater) checkAndUpdateCombined() {
 		log.Printf("Failed to get tarball URL: %v", err)
 		return
 	}
-	tarPath := filepath.Join(u.homeDir, "downloads", fmt.Sprintf("release-%s.tar.gz", latest))
+	// Ensure downloads directory exists
+	downloadsDir := filepath.Join(u.homeDir, "downloads")
+	if err := os.MkdirAll(downloadsDir, 0755); err != nil {
+		log.Printf("Failed to create downloads directory: %v", err)
+		return
+	}
+
+	tarPath := filepath.Join(downloadsDir, fmt.Sprintf("release-%s.tar.gz", latest))
 	if err := u.githubClient.DownloadBinary(tarURL, tarPath, nil); err != nil {
 		log.Printf("Failed to download tarball: %v", err)
 		return
