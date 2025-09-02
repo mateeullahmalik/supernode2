@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -26,7 +27,6 @@ import (
 )
 
 const (
-	defaultConnDeadline                = 10 * time.Minute
 	defaultConnRate                    = 1000
 	defaultMaxPayloadSize              = 200 // MB
 	errorBusy                          = "Busy"
@@ -40,9 +40,20 @@ var execTimeouts map[int]time.Duration
 func init() {
 	// Initialize the request execution timeout values
 	execTimeouts = map[int]time.Duration{
+		// Lightweight RPCs
+		Ping:          5 * time.Second,
+		FindNode:      15 * time.Second,
+		BatchFindNode: 15 * time.Second,
+
+		// Value lookups
+		FindValue:       20 * time.Second,
+		BatchFindValues: 60 * time.Second, // large responses, often compressed
+		BatchGetValues:  60 * time.Second,
+
+		// Data movement
+		StoreData:      30 * time.Second, // allow for slower links
 		BatchStoreData: 60 * time.Second,
-		FindNode:       30 * time.Second,
-		BatchFindNode:  15 * time.Second,
+		Replicate:      60 * time.Second,
 	}
 }
 
@@ -380,6 +391,14 @@ func (s *Network) handleConn(ctx context.Context, rawConn net.Conn) {
 			if err == io.EOF {
 				return
 			}
+			// downgrade pure timeouts to debug to reduce noise
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				logtrace.Debug(ctx, "Read and decode timed out", logtrace.Fields{
+					logtrace.FieldModule: "p2p",
+					logtrace.FieldError:  err.Error(),
+				})
+				return
+			}
 			logtrace.Warn(ctx, "Read and decode failed", logtrace.Fields{
 				logtrace.FieldModule: "p2p",
 				logtrace.FieldError:  err.Error(),
@@ -601,70 +620,126 @@ func (s *Network) Call(ctx context.Context, request *Message, isLong bool) (*Mes
 	defer cancel()
 
 	if request.Receiver != nil && request.Receiver.Port == 50052 {
-		logtrace.Error(ctx, "Invalid receiver port", logtrace.Fields{
-			logtrace.FieldModule: "p2p",
-		})
+		logtrace.Error(ctx, "Invalid receiver port", logtrace.Fields{logtrace.FieldModule: "p2p"})
 		return nil, errors.New("invalid receiver port")
 	}
 	if request.Sender != nil && request.Sender.Port == 50052 {
-		logtrace.Error(ctx, "Invalid sender port", logtrace.Fields{
-			logtrace.FieldModule: "p2p",
-		})
+		logtrace.Error(ctx, "Invalid sender port", logtrace.Fields{logtrace.FieldModule: "p2p"})
 		return nil, errors.New("invalid sender port")
 	}
-
-	remoteAddr := fmt.Sprintf("%s@%s:%d", string(request.Receiver.ID), request.Receiver.IP, request.Receiver.Port)
-
 	if s.clientTC == nil {
 		return nil, errors.New("secure transport credentials are not set")
 	}
 
-	// do secure handshaking
+	// build a safe pool key (use bech32 identity format for handshaker compatibility)
+	idStr := string(request.Receiver.ID)
+	remoteAddr := fmt.Sprintf("%s@%s:%d", idStr, strings.TrimSpace(request.Receiver.IP), request.Receiver.Port)
+
+	// try get from pool
 	s.connPoolMtx.Lock()
 	conn, err := s.connPool.Get(remoteAddr)
-	if err != nil {
-		conn, err = NewSecureClientConn(ctx, s.clientTC, remoteAddr)
-		if err != nil {
-			s.connPoolMtx.Unlock()
-			return nil, errors.Errorf("client secure establish %q: %w", remoteAddr, err)
-		}
-		s.connPool.Add(remoteAddr, conn)
-	}
 	s.connPoolMtx.Unlock()
 
-	defer func() {
-		if err != nil && s.clientTC != nil {
-			s.connPoolMtx.Lock()
-			defer s.connPoolMtx.Unlock()
-
-			conn.Close()
-			s.connPool.Del(remoteAddr)
+	// miss: dial, then double-check add
+	if err != nil {
+		newConn, dialErr := NewSecureClientConn(ctx, s.clientTC, remoteAddr)
+		if dialErr != nil {
+			return nil, errors.Errorf("client secure establish %q: %w", remoteAddr, dialErr)
 		}
-	}()
 
-	// refresh deadline for pooled connections
-	operationDeadline := time.Now().Add(timeout)
-	if err := conn.SetDeadline(operationDeadline); err != nil {
-		return nil, errors.Errorf("failed to set connection deadline: %w", err)
+		// double-check someone didn't add meanwhile
+		s.connPoolMtx.Lock()
+		if existing, getErr := s.connPool.Get(remoteAddr); getErr == nil {
+			// someone added already; use existing, close ours
+			_ = newConn.Close()
+			conn = existing
+		} else {
+			s.connPool.Add(remoteAddr, newConn)
+			conn = newConn
+		}
+		s.connPoolMtx.Unlock()
 	}
 
-	// encode and send the request message
+	// Encode once outside the lock
 	data, err := encode(request)
 	if err != nil {
 		return nil, errors.Errorf("encode: %w", err)
 	}
-	if _, werr := conn.Write(data); werr != nil {
-		err = werr
+
+	// If it's our wrapper, lock the whole RPC
+	if cw, ok := conn.(*connWrapper); ok {
+		var resp *Message
+		var rpcErr error
+		var mustDrop bool
+
+		cw.mtx.Lock()
+		{
+			if e := cw.secureConn.SetWriteDeadline(time.Now().Add(5 * time.Second)); e != nil {
+				rpcErr = errors.Errorf("set write deadline: %w", e)
+				mustDrop = true
+			} else if _, e := cw.secureConn.Write(data); e != nil {
+				rpcErr = errors.Errorf("conn write: %w", e)
+				mustDrop = true
+			} else if e := cw.secureConn.SetReadDeadline(time.Now().Add(timeout)); e != nil {
+				rpcErr = errors.Errorf("set read deadline: %w", e)
+				mustDrop = true
+			} else if r, e := decode(cw.secureConn); e != nil {
+				rpcErr = errors.Errorf("conn read: %w", e)
+				mustDrop = true
+			} else {
+				resp = r
+			}
+			_ = cw.secureConn.SetDeadline(time.Time{}) // clear for reuse
+		}
+		cw.mtx.Unlock()
+
+		if mustDrop {
+			// evict AFTER unlocking to avoid deadlock in Close()
+			s.connPoolMtx.Lock()
+			_ = conn.Close()
+			s.connPool.Del(remoteAddr)
+			s.connPoolMtx.Unlock()
+		}
+
+		if rpcErr != nil {
+			return nil, rpcErr
+		}
+		return resp, nil
+	}
+
+	// Fallback: not a connWrapper (rare)
+	if err := conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		// best effort evict
+		s.connPoolMtx.Lock()
+		_ = conn.Close()
+		s.connPool.Del(remoteAddr)
+		s.connPoolMtx.Unlock()
+		return nil, errors.Errorf("set write deadline: %w", err)
+	}
+	if _, err := conn.Write(data); err != nil {
+		s.connPoolMtx.Lock()
+		_ = conn.Close()
+		s.connPool.Del(remoteAddr)
+		s.connPoolMtx.Unlock()
 		return nil, errors.Errorf("conn write: %w", err)
 	}
-
-	// receive and decode the response message
-	response, err := decode(conn)
+	if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		s.connPoolMtx.Lock()
+		_ = conn.Close()
+		s.connPool.Del(remoteAddr)
+		s.connPoolMtx.Unlock()
+		return nil, errors.Errorf("set read deadline: %w", err)
+	}
+	resp, err := decode(conn)
 	if err != nil {
+		s.connPoolMtx.Lock()
+		_ = conn.Close()
+		s.connPool.Del(remoteAddr)
+		s.connPoolMtx.Unlock()
 		return nil, errors.Errorf("conn read: %w", err)
 	}
-
-	return response, nil
+	_ = conn.SetDeadline(time.Time{})
+	return resp, nil
 }
 
 func (s *Network) handleBatchFindValues(ctx context.Context, message *Message, reqID string) (res []byte, err error) {

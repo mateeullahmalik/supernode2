@@ -1,8 +1,8 @@
 package utils
 
 import (
-    "strconv"
-    "strings"
+	"strconv"
+	"strings"
 )
 
 // CompareVersions compares two semantic versions (SemVer 2.0.0)
@@ -11,8 +11,8 @@ import (
 // - Properly compares pre-release identifiers (lower precedence than normal)
 // Returns: -1 if v1 < v2, 0 if equal, 1 if v1 > v2
 func CompareVersions(v1, v2 string) int {
-    p1 := parseSemver(v1)
-    p2 := parseSemver(v2)
+	p1 := parseSemver(v1)
+	p2 := parseSemver(v2)
 
 	// Compare core version
 	if p1.major != p2.major {
@@ -34,10 +34,10 @@ func CompareVersions(v1, v2 string) int {
 		return 1
 	}
 
-    // If core equal, pre-release precedence: absence > presence
-    if len(p1.prerelease) == 0 && len(p2.prerelease) == 0 {
-    	return 0
-    }
+	// If core equal, pre-release precedence: absence > presence
+	if len(p1.prerelease) == 0 && len(p2.prerelease) == 0 {
+		return 0
+	}
 	if len(p1.prerelease) == 0 {
 		return 1
 	}
@@ -51,19 +51,16 @@ func CompareVersions(v1, v2 string) int {
 		max = len(p2.prerelease)
 	}
 	for i := 0; i < max; i++ {
-		id1 := ""
-		id2 := ""
+		id1, id2 := "", ""
 		if i < len(p1.prerelease) {
 			id1 = p1.prerelease[i]
 		}
 		if i < len(p2.prerelease) {
 			id2 = p2.prerelease[i]
 		}
-
 		if id1 == id2 {
 			continue
 		}
-
 		n1, e1 := strconv.Atoi(id1)
 		n2, e2 := strconv.Atoi(id2)
 		if e1 == nil && e2 == nil {
@@ -73,7 +70,6 @@ func CompareVersions(v1, v2 string) int {
 			return 1
 		}
 		if e1 == nil && e2 != nil {
-			// Numeric identifiers have lower precedence than non-numeric
 			return -1
 		}
 		if e1 != nil && e2 == nil {
@@ -84,8 +80,6 @@ func CompareVersions(v1, v2 string) int {
 		}
 		return 1
 	}
-
-	// All identifiers equal; shorter set has lower precedence
 	if len(p1.prerelease) < len(p2.prerelease) {
 		return -1
 	}
@@ -99,9 +93,9 @@ func CompareVersions(v1, v2 string) int {
 // It ignores leading 'v', build metadata, and pre-release suffixes when
 // determining the major version.
 func SameMajor(v1, v2 string) bool {
-    p1 := parseSemver(v1)
-    p2 := parseSemver(v2)
-    return p1.major == p2.major
+	p1 := parseSemver(v1)
+	p2 := parseSemver(v2)
+	return p1.major == p2.major
 }
 
 type semverParts struct {
@@ -113,15 +107,12 @@ type semverParts struct {
 
 func parseSemver(v string) semverParts {
 	v = strings.TrimPrefix(v, "v")
-	// Strip build metadata
 	if i := strings.IndexByte(v, '+'); i >= 0 {
 		v = v[:i]
 	}
-	core := v
-	pre := ""
+	core, pre := v, ""
 	if i := strings.IndexByte(v, '-'); i >= 0 {
-		core = v[:i]
-		pre = v[i+1:]
+		core, pre = v[:i], v[i+1:]
 	}
 	maj, min, pat := 0, 0, 0
 	parts := strings.Split(core, ".")

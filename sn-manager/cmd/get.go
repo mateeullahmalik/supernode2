@@ -8,6 +8,7 @@ import (
 
 	"github.com/LumeraProtocol/supernode/v2/sn-manager/internal/config"
 	"github.com/LumeraProtocol/supernode/v2/sn-manager/internal/github"
+	"github.com/LumeraProtocol/supernode/v2/sn-manager/internal/utils"
 	"github.com/LumeraProtocol/supernode/v2/sn-manager/internal/version"
 	"github.com/spf13/cobra"
 )
@@ -46,18 +47,30 @@ func runGet(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	downloadURL, err := client.GetSupernodeDownloadURL(targetVersion)
+	// Use combined tarball, then extract supernode
+	tarURL, err := client.GetReleaseTarballURL(targetVersion)
 	if err != nil {
-		return fmt.Errorf("failed to get download URL: %w", err)
+		return fmt.Errorf("failed to get tarball URL: %w", err)
 	}
-
-	tempFile := filepath.Join(managerHome, "downloads", fmt.Sprintf("supernode-%s.tmp", targetVersion))
-
-	progress, done := newDownloadProgressPrinter()
-	if err := client.DownloadBinary(downloadURL, tempFile, progress); err != nil {
-		return fmt.Errorf("download failed: %w", err)
+	downloadsDir := filepath.Join(managerHome, "downloads")
+	if err := os.MkdirAll(downloadsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create downloads dir: %w", err)
 	}
-	done()
+	tarPath := filepath.Join(downloadsDir, fmt.Sprintf("release-%s.tar.gz", targetVersion))
+	// Download tarball if not already present
+	if _, statErr := os.Stat(tarPath); os.IsNotExist(statErr) {
+		progress, done := newDownloadProgressPrinter()
+		if err := utils.DownloadFile(tarURL, tarPath, progress); err != nil {
+			return fmt.Errorf("download failed: %w", err)
+		}
+		done()
+	}
+	defer os.Remove(tarPath)
+
+	tempFile := filepath.Join(downloadsDir, fmt.Sprintf("supernode-%s.tmp", targetVersion))
+	if err := utils.ExtractFileFromTarGz(tarPath, "supernode", tempFile); err != nil {
+		return fmt.Errorf("failed to extract supernode: %w", err)
+	}
 
 	if err := versionMgr.InstallVersion(targetVersion, tempFile); err != nil {
 		return fmt.Errorf("install failed: %w", err)

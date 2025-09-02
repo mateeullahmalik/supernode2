@@ -8,6 +8,8 @@ import (
 	"math"
 	"net"
 	"net/url"
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,7 +33,7 @@ const (
 	defaultNetworkPort                   uint16 = 4445
 	defaultNetworkAddr                          = "0.0.0.0"
 	defaultRefreshTime                          = time.Second * 3600
-	defaultPingTime                             = time.Second * 10
+	defaultPingTime                             = 5 * time.Second
 	defaultCleanupInterval                      = time.Minute * 2
 	defaultDisabledKeyExpirationInterval        = time.Minute * 30
 	defaultRedundantDataCleanupInterval         = 12 * time.Hour
@@ -55,12 +57,55 @@ type DHT struct {
 	metaStore      MetaStore        // the meta storage of DHT
 	done           chan struct{}    // distributed hash table is done
 	cache          storage.KeyValue // store bad bootstrap addresses
-	bsConnected    map[string]bool  // map of connected bootstrap nodes [identity] -> connected
+	bsConnected    *sync.Map        // map of connected bootstrap nodes [identity] -> connected
 	supernodeAddr  string           // cached address from chain
 	mtx            sync.RWMutex
 	ignorelist     *BanList
 	replicationMtx sync.RWMutex
 	rqstore        rqstore.Store
+}
+
+// bootstrapIgnoreList seeds the in-memory ignore list with nodes that are
+// currently marked inactive in the replication info store so we avoid
+// contacting them during initial bootstrap. This does not fail the Start.
+func (s *DHT) bootstrapIgnoreList(ctx context.Context) error {
+	if s.store == nil {
+		return nil
+	}
+
+	infos, err := s.store.GetAllReplicationInfo(ctx)
+	if err != nil {
+		return fmt.Errorf("get replication info: %w", err)
+	}
+	if len(infos) == 0 {
+		return nil
+	}
+
+	added := 0
+	for _, info := range infos {
+		if info.Active {
+			continue
+		}
+		// Seed as banned by setting count above threshold; use UpdatedAt as createdAt basis
+		n := &Node{ID: info.ID, IP: info.IP, Port: info.Port}
+		createdAt := info.UpdatedAt
+		if createdAt.IsZero() && info.LastSeen != nil {
+			createdAt = *info.LastSeen
+		}
+		if createdAt.IsZero() {
+			createdAt = time.Now().UTC()
+		}
+		s.ignorelist.AddWithCreatedAt(n, createdAt, threshold+1)
+		added++
+	}
+
+	if added > 0 {
+		logtrace.Info(ctx, "Ignore list bootstrapped from replication info", logtrace.Fields{
+			logtrace.FieldModule: "p2p",
+			"ignored_count":      added,
+		})
+	}
+	return nil
 }
 
 // Options contains configuration options for the queries node
@@ -100,7 +145,7 @@ func NewDHT(ctx context.Context, store Store, metaStore MetaStore, options *Opti
 		options:        options,
 		done:           make(chan struct{}),
 		cache:          memory.NewKeyValue(),
-		bsConnected:    make(map[string]bool),
+		bsConnected:    &sync.Map{},
 		ignorelist:     NewBanList(ctx),
 		replicationMtx: sync.RWMutex{},
 		rqstore:        rqstore,
@@ -175,8 +220,8 @@ func (s *DHT) getSupernodeAddress(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to get supernode address: %w", err)
 	}
-	s.supernodeAddr = supernodeInfo.LatestAddress
-	return supernodeInfo.LatestAddress, nil
+	s.supernodeAddr = strings.TrimSpace(supernodeInfo.LatestAddress)
+	return s.supernodeAddr, nil
 }
 
 // getCachedSupernodeAddress returns cached supernode address without chain queries
@@ -193,18 +238,21 @@ func (s *DHT) getCachedSupernodeAddress() string {
 // parseSupernodeAddress extracts the host part from a URL or address string.
 // It handles http/https prefixes, optional ports, and raw host:port formats.
 func parseSupernodeAddress(address string) string {
+	// Always trim whitespace first
+	address = strings.TrimSpace(address)
+
 	// If it looks like a URL, parse with net/url
 	if u, err := url.Parse(address); err == nil && u.Host != "" {
 		host, _, err := net.SplitHostPort(u.Host)
 		if err == nil {
-			return host
+			return strings.TrimSpace(host)
 		}
-		return u.Host // no port present
+		return strings.TrimSpace(u.Host) // no port present
 	}
 
-	// If it’s just host:port, handle with SplitHostPort
+	// If it's just host:port, handle with SplitHostPort
 	if host, _, err := net.SplitHostPort(address); err == nil {
-		return host
+		return strings.TrimSpace(host)
 	}
 
 	// Otherwise return as-is (probably just a bare host)
@@ -224,6 +272,14 @@ func (s *DHT) Start(ctx context.Context) error {
 
 	if _, err := s.getSupernodeAddress(initCtx); err != nil {
 		logtrace.Warn(ctx, "Failed to pre-fetch supernode address, will use fallback", logtrace.Fields{
+			logtrace.FieldModule: "p2p",
+			logtrace.FieldError:  err.Error(),
+		})
+	}
+
+	// Bootstrap ignore list from persisted replication info (inactive nodes)
+	if err := s.bootstrapIgnoreList(ctx); err != nil {
+		logtrace.Warn(ctx, "Failed to bootstrap ignore list", logtrace.Fields{
 			logtrace.FieldModule: "p2p",
 			logtrace.FieldError:  err.Error(),
 		})
@@ -399,6 +455,23 @@ func (s *DHT) Stats(ctx context.Context) (map[string]interface{}, error) {
 func (s *DHT) newMessage(messageType int, receiver *Node, data interface{}) *Message {
 	supernodeAddr := s.getCachedSupernodeAddress()
 	hostIP := parseSupernodeAddress(supernodeAddr)
+
+	// If fallback produced an invalid address (e.g., 0.0.0.0), choose a safe sender IP
+	if ip := net.ParseIP(hostIP); ip == nil || ip.IsUnspecified() || ip.IsLoopback() || ip.IsPrivate() {
+		// Prefer valid self IP; in integration tests, allow loopback and private
+		isIntegrationTest := os.Getenv("INTEGRATION_TEST") == "true"
+		if sip := net.ParseIP(s.ht.self.IP); sip != nil {
+			if !sip.IsUnspecified() && (isIntegrationTest || (!sip.IsLoopback() && !sip.IsPrivate())) {
+				hostIP = s.ht.self.IP
+			} else if isIntegrationTest {
+				// Default to localhost when running local tests and no valid external IP
+				hostIP = "127.0.0.1"
+			}
+		} else if isIntegrationTest {
+			hostIP = "127.0.0.1"
+		}
+	}
+
 	sender := &Node{
 		IP:   hostIP,
 		ID:   s.ht.self.ID,
@@ -1007,7 +1080,7 @@ func (s *DHT) iterate(ctx context.Context, iterativeType int, target []byte, dat
 	var contacted = make(map[string]bool)
 
 	// Set a timeout for the iteration process
-	timeout := time.After(10 * time.Second) // Adjust the timeout duration as needed
+	timeout := time.After(10 * time.Second) // Quick iteration window
 
 	// Set a maximum number of iterations to prevent indefinite looping
 	maxIterations := 5 // Adjust the maximum iterations as needed
@@ -1270,9 +1343,19 @@ func (s *DHT) sendStoreData(ctx context.Context, n *Node, request *StoreDataRequ
 
 // add a node into the appropriate k bucket, return the removed node if it's full
 func (s *DHT) addNode(ctx context.Context, node *Node) *Node {
+	// Allow localhost for integration testing
+	isIntegrationTest := os.Getenv("INTEGRATION_TEST") == "true"
+
+	if node.IP == "" || node.IP == "0.0.0.0" || (!isIntegrationTest && node.IP == "127.0.0.1") {
+		logtrace.Debug(ctx, "Trying to add invalid node", logtrace.Fields{
+			logtrace.FieldModule: "p2p",
+		})
+		return nil
+	}
+
 	// ensure this is not itself address
 	if bytes.Equal(node.ID, s.ht.self.ID) {
-		logtrace.Info(ctx, "Trying to add itself", logtrace.Fields{
+		logtrace.Debug(ctx, "Trying to add itself", logtrace.Fields{
 			logtrace.FieldModule: "p2p",
 		})
 		return nil
@@ -1291,7 +1374,8 @@ func (s *DHT) addNode(ctx context.Context, node *Node) *Node {
 	}
 
 	if s.ht.hasBucketNode(index, node.ID) {
-		s.ht.refreshNode(node.ID)
+		// refresh using hashed ID to match hashtable expectations
+		s.ht.refreshNode(node.HashedID)
 		return nil
 	}
 
@@ -1318,7 +1402,8 @@ func (s *DHT) addNode(ctx context.Context, node *Node) *Node {
 			return nil
 		} else {
 
-			s.ignorelist.IncrementCount(node)
+			// Penalize the unresponsive resident, not the new candidate
+			s.ignorelist.IncrementCount(first)
 			// the node is down, remove the node from bucket
 			bucket = append(bucket, node)
 			bucket = bucket[1:]
@@ -1524,6 +1609,31 @@ func (s *DHT) addKnownNodes(ctx context.Context, nodes []*Node, knownNodes map[s
 		if _, ok := knownNodes[string(node.ID)]; ok {
 			continue
 		}
+
+		// Reject bind/local/link-local/private/bogus addresses early
+		// Allow loopback/private addresses during integration testing
+		isIntegrationTest := os.Getenv("INTEGRATION_TEST") == "true"
+		if ip := net.ParseIP(node.IP); ip != nil {
+			// Always reject unspecified. For integration tests, allow loopback/link-local.
+			if ip.IsUnspecified() || (!isIntegrationTest && (ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast())) {
+				s.ignorelist.IncrementCount(node)
+				continue
+			}
+			// If this overlay is public, also reject RFC1918/CGNAT. Allow during integration tests.
+			if !isIntegrationTest && ip.IsPrivate() {
+				s.ignorelist.IncrementCount(node)
+				continue
+			}
+		} else {
+			// Hostname: basic sanity (must look like a FQDN)
+			if !strings.Contains(node.IP, ".") {
+				if !(isIntegrationTest && strings.EqualFold(node.IP, "localhost")) {
+					s.ignorelist.IncrementCount(node)
+					continue
+				}
+			}
+		}
+
 		node.SetHashedID()
 		knownNodes[string(node.ID)] = node
 
@@ -1536,7 +1646,7 @@ func (s *DHT) addKnownNodes(ctx context.Context, nodes []*Node, knownNodes map[s
 func (s *DHT) IterateBatchStore(ctx context.Context, values [][]byte, typ int, id string) error {
 	globalClosestContacts := make(map[string]*NodeList)
 	knownNodes := make(map[string]*Node)
-	contacted := make(map[string]bool)
+	// contacted := make(map[string]bool)
 	hashes := make([][]byte, len(values))
 
 	logtrace.Info(ctx, "Iterate batch store begin", logtrace.Fields{
@@ -1555,92 +1665,92 @@ func (s *DHT) IterateBatchStore(ctx context.Context, values [][]byte, typ int, i
 		s.addKnownNodes(ctx, top6.Nodes, knownNodes)
 	}
 
-	var changed bool
-	var i int
-	for {
-		i++
-		logtrace.Info(ctx, "Iterate batch store begin", logtrace.Fields{
-			logtrace.FieldModule: "dht",
-			"task_id":            id,
-			"iter":               i,
-			"keys":               len(values),
-		})
-		changed = false
-		localClosestNodes := make(map[string]*NodeList)
-		responses, atleastOneContacted := s.batchFindNode(ctx, hashes, knownNodes, contacted, id)
+	// var changed bool
+	// var i int
+	// for {
+	// 	i++
+	// 	logtrace.Info(ctx, "Iterate batch store begin", logtrace.Fields{
+	// 		logtrace.FieldModule: "dht",
+	// 		"task_id":            id,
+	// 		"iter":               i,
+	// 		"keys":               len(values),
+	// 	})
+	// 	changed = false
+	// 	localClosestNodes := make(map[string]*NodeList)
+	// 	responses, atleastOneContacted := s.batchFindNode(ctx, hashes, knownNodes, contacted, id)
 
-		if !atleastOneContacted {
-			logtrace.Info(ctx, "Break", logtrace.Fields{
-				logtrace.FieldModule: "dht",
-			})
-			break
-		}
+	// 	if !atleastOneContacted {
+	// 		logtrace.Info(ctx, "Break", logtrace.Fields{
+	// 			logtrace.FieldModule: "dht",
+	// 		})
+	// 		break
+	// 	}
 
-		for response := range responses {
-			if response.Error != nil {
-				logtrace.Error(ctx, "Batch find node failed on a node", logtrace.Fields{
-					logtrace.FieldModule: "dht",
-					"task_id":            id,
-					logtrace.FieldError:  response.Error.Error(),
-				})
-				continue
-			}
+	// 	for response := range responses {
+	// 		if response.Error != nil {
+	// 			logtrace.Error(ctx, "Batch find node failed on a node", logtrace.Fields{
+	// 				logtrace.FieldModule: "dht",
+	// 				"task_id":            id,
+	// 				logtrace.FieldError:  response.Error.Error(),
+	// 			})
+	// 			continue
+	// 		}
 
-			if response.Message == nil {
-				continue
-			}
+	// 		if response.Message == nil {
+	// 			continue
+	// 		}
 
-			v, ok := response.Message.Data.(*BatchFindNodeResponse)
-			if ok && v.Status.Result == ResultOk {
-				for key, nodesList := range v.ClosestNodes {
-					if nodesList != nil {
-						nl, exists := localClosestNodes[key]
-						if exists {
-							nl.AddNodes(nodesList)
-							localClosestNodes[key] = nl
-						} else {
-							localClosestNodes[key] = &NodeList{Nodes: nodesList, Comparator: base58.Decode(key)}
-						}
+	// 		v, ok := response.Message.Data.(*BatchFindNodeResponse)
+	// 		if ok && v.Status.Result == ResultOk {
+	// 			for key, nodesList := range v.ClosestNodes {
+	// 				if nodesList != nil {
+	// 					nl, exists := localClosestNodes[key]
+	// 					if exists {
+	// 						nl.AddNodes(nodesList)
+	// 						localClosestNodes[key] = nl
+	// 					} else {
+	// 						localClosestNodes[key] = &NodeList{Nodes: nodesList, Comparator: base58.Decode(key)}
+	// 					}
 
-						s.addKnownNodes(ctx, nodesList, knownNodes)
-					}
-				}
-			}
-		}
+	// 					s.addKnownNodes(ctx, nodesList, knownNodes)
+	// 				}
+	// 			}
+	// 		}
+	// 	}
 
-		// we now need to check if the nodes in the globalClosestContacts Map are still in the top 6
-		// if yes, we can store the data to them
-		// if not, we need to send calls to the newly found nodes to inquire about the top 6 nodes
-		logtrace.Info(ctx, "Check closest nodes & begin store", logtrace.Fields{
-			logtrace.FieldModule: "dht",
-			"task_id":            id,
-			"iter":               i,
-			"keys":               len(values),
-		})
-		for key, nodesList := range localClosestNodes {
-			if nodesList == nil {
-				continue
-			}
+	// 	// we now need to check if the nodes in the globalClosestContacts Map are still in the top 6
+	// 	// if yes, we can store the data to them
+	// 	// if not, we need to send calls to the newly found nodes to inquire about the top 6 nodes
+	// 	logtrace.Info(ctx, "Check closest nodes & begin store", logtrace.Fields{
+	// 		logtrace.FieldModule: "dht",
+	// 		"task_id":            id,
+	// 		"iter":               i,
+	// 		"keys":               len(values),
+	// 	})
+	// 	for key, nodesList := range localClosestNodes {
+	// 		if nodesList == nil {
+	// 			continue
+	// 		}
 
-			nodesList.Comparator = base58.Decode(key)
-			nodesList.Sort()
-			nodesList.TopN(Alpha)
-			s.addKnownNodes(ctx, nodesList.Nodes, knownNodes)
+	// 		nodesList.Comparator = base58.Decode(key)
+	// 		nodesList.Sort()
+	// 		nodesList.TopN(Alpha)
+	// 		s.addKnownNodes(ctx, nodesList.Nodes, knownNodes)
 
-			if !haveAllNodes(nodesList.Nodes, globalClosestContacts[key].Nodes) {
-				changed = true
-			}
+	// 		if !haveAllNodes(nodesList.Nodes, globalClosestContacts[key].Nodes) {
+	// 			changed = true
+	// 		}
 
-			nodesList.AddNodes(globalClosestContacts[key].Nodes)
-			nodesList.Sort()
-			nodesList.TopN(Alpha)
-			globalClosestContacts[key] = nodesList
-		}
+	// 		nodesList.AddNodes(globalClosestContacts[key].Nodes)
+	// 		nodesList.Sort()
+	// 		nodesList.TopN(Alpha)
+	// 		globalClosestContacts[key] = nodesList
+	// 	}
 
-		if !changed {
-			break
-		}
-	}
+	// 	if !changed {
+	// 		break
+	// 	}
+	// }
 
 	// assume at this point, we have True\Golabl top 6 nodes for each symbol's hash stored in globalClosestContacts Map
 	// we now need to store the data to these nodes
@@ -1717,7 +1827,14 @@ func (s *DHT) IterateBatchStore(ctx context.Context, values [][]byte, typ int, i
 
 func (s *DHT) batchStoreNetwork(ctx context.Context, values [][]byte, nodes map[string]*Node, storageMap map[string][]int, typ int) chan *MessageWithError {
 	responses := make(chan *MessageWithError, len(nodes))
-	semaphore := make(chan struct{}, 3) // Semaphore to limit concurrency to 3
+	maxStore := 16
+	if ln := len(nodes); ln < maxStore {
+		maxStore = ln
+	}
+	if maxStore < 1 {
+		maxStore = 1
+	}
+	semaphore := make(chan struct{}, maxStore)
 
 	var wg sync.WaitGroup
 
@@ -1794,7 +1911,14 @@ func (s *DHT) batchFindNode(ctx context.Context, payload [][]byte, nodes map[str
 	responses := make(chan *MessageWithError, len(nodes))
 	atleastOneContacted := false
 	var wg sync.WaitGroup
-	semaphore := make(chan struct{}, 20)
+	maxInFlight := 64
+	if ln := len(nodes); ln < maxInFlight {
+		maxInFlight = ln
+	}
+	if maxInFlight < 1 {
+		maxInFlight = 1
+	}
+	semaphore := make(chan struct{}, maxInFlight)
 
 	for _, node := range nodes {
 		if _, ok := contacted[string(node.ID)]; ok {

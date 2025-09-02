@@ -15,6 +15,7 @@ import (
 	"github.com/LumeraProtocol/supernode/v2/sn-manager/internal/github"
 	"github.com/LumeraProtocol/supernode/v2/sn-manager/internal/manager"
 	"github.com/LumeraProtocol/supernode/v2/sn-manager/internal/updater"
+	"github.com/LumeraProtocol/supernode/v2/sn-manager/internal/utils"
 	"github.com/LumeraProtocol/supernode/v2/sn-manager/internal/version"
 	"github.com/spf13/cobra"
 )
@@ -180,7 +181,7 @@ func ensureBinaryExists(home string, cfg *config.Config) error {
 		return nil
 	}
 
-	// No versions installed, download latest
+	// No versions installed, download latest tarball and extract supernode
 	fmt.Println("No SuperNode binary found. Downloading latest version...")
 
 	client := github.NewClient(config.GitHubRepo)
@@ -192,22 +193,31 @@ func ensureBinaryExists(home string, cfg *config.Config) error {
 	targetVersion := release.TagName
 	fmt.Printf("Downloading SuperNode %s...\n", targetVersion)
 
-	// Get download URL
-	downloadURL, err := client.GetSupernodeDownloadURL(targetVersion)
+	// Download tarball
+	tarURL, err := client.GetReleaseTarballURL(targetVersion)
 	if err != nil {
-		return fmt.Errorf("failed to get download URL: %w", err)
+		return fmt.Errorf("failed to get tarball URL: %w", err)
 	}
-
-	// Download to temp file
-	tempFile := filepath.Join(home, "downloads", fmt.Sprintf("supernode-%s.tmp", targetVersion))
-	os.MkdirAll(filepath.Dir(tempFile), 0755)
-
-	// Download with progress
-	progress, done := newDownloadProgressPrinter()
-	if err := client.DownloadBinary(downloadURL, tempFile, progress); err != nil {
-		return fmt.Errorf("failed to download binary: %w", err)
+	downloadsDir := filepath.Join(home, "downloads")
+	if err := os.MkdirAll(downloadsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create downloads dir: %w", err)
 	}
-	done()
+	tarPath := filepath.Join(downloadsDir, fmt.Sprintf("release-%s.tar.gz", targetVersion))
+	// Download tarball if not already present
+	if _, statErr := os.Stat(tarPath); os.IsNotExist(statErr) {
+		progress, done := newDownloadProgressPrinter()
+		if err := utils.DownloadFile(tarURL, tarPath, progress); err != nil {
+			return fmt.Errorf("failed to download tarball: %w", err)
+		}
+		done()
+	}
+	defer os.Remove(tarPath)
+
+	// Extract supernode to temp
+	tempFile := filepath.Join(downloadsDir, fmt.Sprintf("supernode-%s.tmp", targetVersion))
+	if err := utils.ExtractFileFromTarGz(tarPath, "supernode", tempFile); err != nil {
+		return fmt.Errorf("failed to extract supernode: %w", err)
+	}
 
 	fmt.Println("Download complete. Installing...")
 

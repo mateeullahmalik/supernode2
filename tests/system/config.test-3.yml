@@ -1,3 +1,5 @@
+# Note: During tests, local loopback/localhost is allowed by the P2P layer
+# when INTEGRATION_TEST=true (set by tests). No change needed here.
 #young envelope urban crucial denial zone toward mansion protect bonus exotic puppy resource pistol expand tell cupboard radio hurry world radio trust explain million
 # Supernode Configuration
 supernode:

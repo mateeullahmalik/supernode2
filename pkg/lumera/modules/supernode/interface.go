@@ -24,6 +24,7 @@ type Module interface {
 	GetSupernodeBySupernodeAddress(ctx context.Context, address string) (*types.SuperNode, error)
 	GetSupernodeWithLatestAddress(ctx context.Context, address string) (*SuperNodeInfo, error)
 	GetParams(ctx context.Context) (*types.QueryParamsResponse, error)
+	ListSuperNodes(ctx context.Context) (*types.QueryListSuperNodesResponse, error)
 }
 
 // NewModule creates a new SuperNode module client

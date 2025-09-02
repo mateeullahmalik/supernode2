@@ -168,10 +168,14 @@ func (m *MockSupernodeModule) GetSupernodeWithLatestAddress(ctx context.Context,
 	return &supernode.SuperNodeInfo{
 		SupernodeAccount: address,
 		ValidatorAddress: "validator_" + address,
-		P2PPort:         "4445",
-		LatestAddress:   "127.0.0.1:9000",
-		CurrentState:    "SUPERNODE_STATE_ACTIVE",
+		P2PPort:          "4445",
+		LatestAddress:    "127.0.0.1:9000",
+		CurrentState:     "SUPERNODE_STATE_ACTIVE",
 	}, nil
+}
+
+func (m *MockSupernodeModule) ListSuperNodes(ctx context.Context) (*supernodeTypes.QueryListSuperNodesResponse, error) {
+	return &supernodeTypes.QueryListSuperNodesResponse{}, nil
 }
 
 // MockTxModule implements the tx.Module interface for testing

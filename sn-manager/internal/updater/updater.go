@@ -3,16 +3,13 @@ package updater
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
-
-	"archive/tar"
-	"compress/gzip"
-	"io"
 
 	pb "github.com/LumeraProtocol/supernode/v2/gen/supernode"
 	"github.com/LumeraProtocol/supernode/v2/sn-manager/internal/config"
@@ -22,6 +19,8 @@ import (
 	"github.com/LumeraProtocol/supernode/v2/supernode/node/supernode/gateway"
 	"google.golang.org/protobuf/encoding/protojson"
 )
+
+const gatewayTimeout = 5 * time.Second
 
 type AutoUpdater struct {
 	config         *config.Config
@@ -60,8 +59,12 @@ func (u *AutoUpdater) Start(ctx context.Context) {
 		return
 	}
 
-	interval := time.Duration(u.config.Updates.CheckInterval) * time.Second
+	// Fixed update check interval: 10 minutes
+	interval := 1 * time.Minute
 	u.ticker = time.NewTicker(interval)
+
+	// Run an immediate check on startup so restarts don't wait a full interval
+	u.checkAndUpdateCombined()
 
 	go func() {
 		for {
@@ -126,7 +129,7 @@ func (u *AutoUpdater) ShouldUpdate(current, latest string) bool {
 // the gateway could not be reliably checked (network/error/invalid).
 // When isError is false and idle is false, the gateway is busy.
 func (u *AutoUpdater) isGatewayIdle() (bool, bool) {
-	client := &http.Client{Timeout: github.GatewayTimeout}
+	client := &http.Client{Timeout: gatewayTimeout}
 
 	resp, err := client.Get(u.gatewayURL)
 	if err != nil {
@@ -218,8 +221,15 @@ func (u *AutoUpdater) checkAndUpdateCombined() {
 		log.Printf("Failed to get tarball URL: %v", err)
 		return
 	}
-	tarPath := filepath.Join(u.homeDir, "downloads", fmt.Sprintf("release-%s.tar.gz", latest))
-	if err := u.githubClient.DownloadBinary(tarURL, tarPath, nil); err != nil {
+	// Ensure downloads directory exists
+	downloadsDir := filepath.Join(u.homeDir, "downloads")
+	if err := os.MkdirAll(downloadsDir, 0755); err != nil {
+		log.Printf("Failed to create downloads directory: %v", err)
+		return
+	}
+
+	tarPath := filepath.Join(downloadsDir, fmt.Sprintf("release-%s.tar.gz", latest))
+	if err := utils.DownloadFile(tarURL, tarPath, nil); err != nil {
 		log.Printf("Failed to download tarball: %v", err)
 		return
 	}
@@ -228,23 +238,6 @@ func (u *AutoUpdater) checkAndUpdateCombined() {
 			log.Printf("Warning: failed to remove tarball: %v", err)
 		}
 	}()
-
-	// Open tarball for extraction once
-	f, err := os.Open(tarPath)
-	if err != nil {
-		log.Printf("Failed to open tarball: %v", err)
-		return
-	}
-	defer f.Close()
-
-	gz, err := gzip.NewReader(f)
-	if err != nil {
-		log.Printf("Failed to create gzip reader: %v", err)
-		return
-	}
-	defer gz.Close()
-
-	tr := tar.NewReader(gz)
 
 	// Prepare paths for extraction targets
 	exePath, err := os.Executable()
@@ -256,62 +249,23 @@ func (u *AutoUpdater) checkAndUpdateCombined() {
 	tmpManager := exePath + ".new"
 	tmpSN := filepath.Join(u.homeDir, "downloads", fmt.Sprintf("supernode-%s.tmp", latest))
 
-	extractedManager := false
-	extractedSN := false
-
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			log.Printf("Tar read error: %v", err)
-			return
-		}
-		base := filepath.Base(hdr.Name)
-
-		if managerNeedsUpdate && base == "sn-manager" && !extractedManager {
-			out, err := os.OpenFile(tmpManager, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0755)
-			if err != nil {
-				log.Printf("Failed to create temp sn-manager: %v", err)
-				return
-			}
-			if _, err := io.Copy(out, tr); err != nil {
-				out.Close()
-				os.Remove(tmpManager)
-				log.Printf("Failed to extract sn-manager: %v", err)
-				return
-			}
-			if err := out.Close(); err != nil {
-				os.Remove(tmpManager)
-				log.Printf("Failed to close temp sn-manager: %v", err)
-				return
-			}
-			extractedManager = true
-			continue
-		}
-
-		if supernodeNeedsUpdate && base == "supernode" && !extractedSN {
-			out, err := os.OpenFile(tmpSN, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0755)
-			if err != nil {
-				log.Printf("Failed to create temp supernode: %v", err)
-				return
-			}
-			if _, err := io.Copy(out, tr); err != nil {
-				out.Close()
-				os.Remove(tmpSN)
-				log.Printf("Failed to extract supernode: %v", err)
-				return
-			}
-			if err := out.Close(); err != nil {
-				os.Remove(tmpSN)
-				log.Printf("Failed to close temp supernode: %v", err)
-				return
-			}
-			extractedSN = true
-			continue
-		}
+	// Build extraction targets by base name
+	targets := map[string]string{}
+	if managerNeedsUpdate {
+		targets["sn-manager"] = tmpManager
 	}
+	if supernodeNeedsUpdate {
+		targets["supernode"] = tmpSN
+	}
+
+	found, err := utils.ExtractMultipleFromTarGz(tarPath, targets)
+	if err != nil {
+		log.Printf("Extraction error: %v", err)
+		return
+	}
+
+	extractedManager := managerNeedsUpdate && found["sn-manager"]
+	extractedSN := supernodeNeedsUpdate && found["supernode"]
 
 	// Apply sn-manager update first
 	managerUpdated := false

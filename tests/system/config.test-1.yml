@@ -1,3 +1,5 @@
+# Note: During tests, local loopback/localhost is allowed by the P2P layer
+# when INTEGRATION_TEST=true (set by tests). No change needed here.
 # Supernode Configuration
 supernode:
   key_name: "testkey1"

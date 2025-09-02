@@ -184,6 +184,10 @@ func (task *CascadeRegistrationTask) wrapErr(ctx context.Context, msg string, er
 	}
 	logtrace.Error(ctx, msg, f)
 
+	// Preserve the root cause in the gRPC error description so callers receive full context.
+	if err != nil {
+		return status.Errorf(codes.Internal, "%s: %v", msg, err)
+	}
 	return status.Errorf(codes.Internal, "%s", msg)
 }
 

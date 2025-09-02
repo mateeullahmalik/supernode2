@@ -108,7 +108,6 @@ export SUPERNODE_PASSPHRASE="your-secure-passphrase"
 
 sn-manager init -y \
   --auto-upgrade \
-  --check-interval 3600 \
   --keyring-backend file \
   --keyring-passphrase-env SUPERNODE_PASSPHRASE \
   --key-name myvalidator \
@@ -143,7 +142,8 @@ Note: Unrecognized flags to `sn-manager init` are passed through to the underlyi
 **SN-Manager flags:**
 - `--force` - Override existing configuration
 - `--auto-upgrade` or `--auto-upgrade true|false` - Enable/disable automatic updates (default: enabled)
-- `--check-interval` - Update check interval in seconds
+
+Auto-update checks run every 10 minutes when enabled.
 
 **SuperNode flags (passed through):**
 - `-y` - Skip prompts
@@ -277,7 +277,6 @@ sudo systemctl restart sn-manager
 updates:
   current_version: "v1.7.4"
   auto_upgrade: true
-  check_interval: 3600
 ```
 
 **Reset:**

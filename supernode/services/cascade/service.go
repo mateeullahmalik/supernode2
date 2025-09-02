@@ -45,8 +45,11 @@ func (service *CascadeService) GetServiceName() string {
 // GetRunningTasks returns a list of currently running task IDs
 func (service *CascadeService) GetRunningTasks() []string {
 	var taskIDs []string
-	for _, task := range service.Worker.Tasks() {
-		taskIDs = append(taskIDs, task.ID())
+	for _, t := range service.Worker.Tasks() {
+		// Include only tasks that are not in a final state
+		if st := t.Status(); st != nil && st.SubStatus != nil && !st.SubStatus.IsFinal() {
+			taskIDs = append(taskIDs, t.ID())
+		}
 	}
 	return taskIDs
 }
