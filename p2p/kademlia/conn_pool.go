@@ -142,7 +142,7 @@ func NewSecureClientConn(ctx context.Context, tc credentials.TransportCredential
 
 	// Dial the remote address with a short timeout.
 	d := net.Dialer{
-		Timeout:   3 * time.Second,
+		Timeout:   5 * time.Second,
 		KeepAlive: 30 * time.Second,
 	}
 	rawConn, err := d.DialContext(ctx, "tcp", remoteAddress)

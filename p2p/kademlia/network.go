@@ -40,9 +40,20 @@ var execTimeouts map[int]time.Duration
 func init() {
 	// Initialize the request execution timeout values
 	execTimeouts = map[int]time.Duration{
+		// Lightweight RPCs
+		Ping:          5 * time.Second,
+		FindNode:      15 * time.Second,
+		BatchFindNode: 15 * time.Second,
+
+		// Value lookups
+		FindValue:       20 * time.Second,
+		BatchFindValues: 60 * time.Second, // large responses, often compressed
+		BatchGetValues:  60 * time.Second,
+
+		// Data movement
+		StoreData:      30 * time.Second, // allow for slower links
 		BatchStoreData: 60 * time.Second,
-		FindNode:       30 * time.Second,
-		BatchFindNode:  15 * time.Second,
+		Replicate:      60 * time.Second,
 	}
 }
 
@@ -380,6 +391,14 @@ func (s *Network) handleConn(ctx context.Context, rawConn net.Conn) {
 			if err == io.EOF {
 				return
 			}
+			// downgrade pure timeouts to debug to reduce noise
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				logtrace.Debug(ctx, "Read and decode timed out", logtrace.Fields{
+					logtrace.FieldModule: "p2p",
+					logtrace.FieldError:  err.Error(),
+				})
+				return
+			}
 			logtrace.Warn(ctx, "Read and decode failed", logtrace.Fields{
 				logtrace.FieldModule: "p2p",
 				logtrace.FieldError:  err.Error(),
@@ -655,7 +674,7 @@ func (s *Network) Call(ctx context.Context, request *Message, isLong bool) (*Mes
 
 		cw.mtx.Lock()
 		{
-			if e := cw.secureConn.SetWriteDeadline(time.Now().Add(3 * time.Second)); e != nil {
+			if e := cw.secureConn.SetWriteDeadline(time.Now().Add(5 * time.Second)); e != nil {
 				rpcErr = errors.Errorf("set write deadline: %w", e)
 				mustDrop = true
 			} else if _, e := cw.secureConn.Write(data); e != nil {
@@ -689,7 +708,7 @@ func (s *Network) Call(ctx context.Context, request *Message, isLong bool) (*Mes
 	}
 
 	// Fallback: not a connWrapper (rare)
-	if err := conn.SetWriteDeadline(time.Now().Add(3 * time.Second)); err != nil {
+	if err := conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		// best effort evict
 		s.connPoolMtx.Lock()
 		_ = conn.Close()

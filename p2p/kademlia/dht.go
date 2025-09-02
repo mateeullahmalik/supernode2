@@ -33,7 +33,7 @@ const (
 	defaultNetworkPort                   uint16 = 4445
 	defaultNetworkAddr                          = "0.0.0.0"
 	defaultRefreshTime                          = time.Second * 3600
-	defaultPingTime                             = time.Second * 10
+	defaultPingTime                             = 5 * time.Second
 	defaultCleanupInterval                      = time.Minute * 2
 	defaultDisabledKeyExpirationInterval        = time.Minute * 30
 	defaultRedundantDataCleanupInterval         = 12 * time.Hour
@@ -1080,7 +1080,7 @@ func (s *DHT) iterate(ctx context.Context, iterativeType int, target []byte, dat
 	var contacted = make(map[string]bool)
 
 	// Set a timeout for the iteration process
-	timeout := time.After(10 * time.Second) // Adjust the timeout duration as needed
+	timeout := time.After(10 * time.Second) // Quick iteration window
 
 	// Set a maximum number of iterations to prevent indefinite looping
 	maxIterations := 5 // Adjust the maximum iterations as needed
@@ -1347,7 +1347,7 @@ func (s *DHT) addNode(ctx context.Context, node *Node) *Node {
 	isIntegrationTest := os.Getenv("INTEGRATION_TEST") == "true"
 
 	if node.IP == "" || node.IP == "0.0.0.0" || (!isIntegrationTest && node.IP == "127.0.0.1") {
-		logtrace.Info(ctx, "Trying to add invalid node", logtrace.Fields{
+		logtrace.Debug(ctx, "Trying to add invalid node", logtrace.Fields{
 			logtrace.FieldModule: "p2p",
 		})
 		return nil
@@ -1355,7 +1355,7 @@ func (s *DHT) addNode(ctx context.Context, node *Node) *Node {
 
 	// ensure this is not itself address
 	if bytes.Equal(node.ID, s.ht.self.ID) {
-		logtrace.Info(ctx, "Trying to add itself", logtrace.Fields{
+		logtrace.Debug(ctx, "Trying to add itself", logtrace.Fields{
 			logtrace.FieldModule: "p2p",
 		})
 		return nil

@@ -13,8 +13,8 @@ const (
 	banDuration = 3 * time.Hour
 
 	// threshold - number of failures required to consider a node banned.
-	// Set to 0 so a single failure (count starts at 1) is enough to ban.
-	threshold = 0
+	// failures before treating a node as banned.
+	threshold = 1
 )
 
 // BanNode is the over-the-wire representation of a node

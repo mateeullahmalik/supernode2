@@ -46,7 +46,7 @@ func (s *DHT) checkNodeActivity(ctx context.Context) {
 							"node_id":            string(info.ID),
 						})
 						if info.Active {
-							logtrace.Error(ctx, "setting node to inactive", logtrace.Fields{
+							logtrace.Warn(ctx, "setting node to inactive", logtrace.Fields{
 								logtrace.FieldModule: "p2p",
 								logtrace.FieldError:  err.Error(),
 								"ip":                 info.IP,
