@@ -21,7 +21,7 @@ import (
 
 // Exponential backoff parameters
 var (
-	checkpointInterval = 5 * time.Second // Checkpoint interval in seconds
+	checkpointInterval = 60 * time.Second // Checkpoint interval in seconds
 	//dbLock             sync.Mutex
 	dbName                 = "data001.sqlite3"
 	dbFilePath             = ""
@@ -53,6 +53,7 @@ type Store struct {
 	worker         *Worker
 	cloud          cloud.Storage
 	migrationStore *MigrationMetaStore
+	repWriter      *RepWriter
 }
 
 // Record is a data record
@@ -70,10 +71,10 @@ type Record struct {
 // NewStore returns a new store
 func NewStore(ctx context.Context, dataDir string, cloud cloud.Storage, mst *MigrationMetaStore) (*Store, error) {
 	worker := &Worker{
-		JobQueue: make(chan Job, 500),
+		JobQueue: make(chan Job, 2048),
 		quit:     make(chan bool),
 	}
-
+	repWriter := NewRepWriter(1024)
 	logtrace.Debug(ctx, "p2p data dir", logtrace.Fields{logtrace.FieldModule: "p2p", "data_dir": dataDir})
 	if _, err := os.Stat(dataDir); os.IsNotExist(err) {
 		if err := os.MkdirAll(dataDir, 0750); err != nil {
@@ -88,13 +89,14 @@ func NewStore(ctx context.Context, dataDir string, cloud cloud.Storage, mst *Mig
 	if err != nil {
 		return nil, fmt.Errorf("cannot open sqlite database: %w", err)
 	}
-	db.SetMaxOpenConns(200) // set appropriate value
-	db.SetMaxIdleConns(10)  // set appropriate value
+	db.SetMaxOpenConns(3)
+	db.SetMaxIdleConns(3)
 
 	s := &Store{
-		worker: worker,
-		db:     db,
-		cloud:  cloud,
+		worker:    worker,
+		db:        db,
+		cloud:     cloud,
+		repWriter: repWriter,
 	}
 
 	if !s.checkStore() {
@@ -131,25 +133,20 @@ func NewStore(ctx context.Context, dataDir string, cloud cloud.Storage, mst *Mig
 		logtrace.Error(ctx, "URGENT! unable to create datatype column in p2p database", logtrace.Fields{logtrace.FieldError: err.Error()})
 	}
 
-	logtrace.Debug(ctx, "p2p database creating index on key column", logtrace.Fields{logtrace.FieldModule: "p2p"})
-	_, err = db.Exec("CREATE INDEX IF NOT EXISTS idx_key ON data(key);")
-	if err != nil {
-		logtrace.Error(ctx, "URGENT! unable to create index on key column in p2p database", logtrace.Fields{logtrace.FieldError: err.Error()})
-	}
-	logtrace.Debug(ctx, "p2p database created index on key column", logtrace.Fields{logtrace.FieldModule: "p2p"})
-
 	_, err = db.Exec("CREATE INDEX IF NOT EXISTS idx_createdat ON data(createdAt);")
 	if err != nil {
 		logtrace.Error(ctx, "URGENT! unable to create index on createdAt column in p2p database", logtrace.Fields{logtrace.FieldError: err.Error()})
 	}
+
 	logtrace.Debug(ctx, "p2p database created index on createdAt column", logtrace.Fields{logtrace.FieldModule: "p2p"})
 
 	pragmas := []string{
 		"PRAGMA journal_mode=WAL;",
 		"PRAGMA synchronous=NORMAL;",
 		"PRAGMA cache_size=-20000;",
-		"PRAGMA busy_timeout=120000;",
+		"PRAGMA busy_timeout=15000;",
 		"PRAGMA journal_size_limit=5242880;",
+		"PRAGMA wal_autocheckpoint = 1000;",
 	}
 
 	for _, pragma := range pragmas {
@@ -162,8 +159,10 @@ func NewStore(ctx context.Context, dataDir string, cloud cloud.Storage, mst *Mig
 	dbFilePath = dbFile
 
 	go s.start(ctx)
-	// Run WAL checkpoint worker every 5 seconds
+	// Run WAL checkpoint worker every 60 seconds
 	go s.startCheckpointWorker(ctx)
+
+	go s.startRepWriter(ctx)
 
 	if s.IsCloudBackupOn() {
 		s.migrationStore = mst
@@ -423,12 +422,12 @@ func (s *Store) UpdateKeyReplication(ctx context.Context, key []byte) error {
 }
 
 // Retrieve will return the queries key/value if it exists
-func (s *Store) Retrieve(_ context.Context, key []byte) ([]byte, error) {
+func (s *Store) Retrieve(ctx context.Context, key []byte) ([]byte, error) {
 	hkey := hex.EncodeToString(key)
 
 	r := Record{}
 	query := `SELECT data, is_on_cloud, is_original, datatype FROM data WHERE key = ?`
-	err := s.db.QueryRow(query, hkey).Scan(&r.Data, &r.IsOnCloud, &r.Isoriginal, &r.Datatype)
+	err := s.db.QueryRowContext(ctx, query, hkey).Scan(&r.Data, &r.IsOnCloud, &r.Isoriginal, &r.Datatype)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get record by key %s: %w", hkey, err)
 	}
@@ -489,7 +488,7 @@ func (s *Store) performJob(j Job) error {
 			return fmt.Errorf("failed to store batch record: %w", err)
 		}
 
-		logtrace.Info(ctx, "successfully stored batch records", logtrace.Fields{logtrace.FieldTaskID: j.TaskID, "id": j.ReqID})
+		logtrace.Debug(ctx, "successfully stored batch records", logtrace.Fields{logtrace.FieldTaskID: j.TaskID, "id": j.ReqID})
 	case "Update":
 		err := s.updateKeyReplication(j.Key, j.ReplicatedAt)
 		if err != nil {
@@ -653,9 +652,9 @@ func (s *Store) deleteAll() error {
 }
 
 // Count the records in store
-func (s *Store) Count(_ context.Context) (int, error) {
+func (s *Store) Count(ctx context.Context) (int, error) {
 	var count int
-	err := s.db.Get(&count, `SELECT COUNT(*) FROM data`)
+	err := s.db.GetContext(ctx, &count, `SELECT COUNT(*) FROM data`)
 	if err != nil {
 		return -1, fmt.Errorf("failed to get count of records: %w", err)
 	}
@@ -686,11 +685,16 @@ func (s *Store) Stats(ctx context.Context) (map[string]interface{}, error) {
 func (s *Store) Close(ctx context.Context) {
 	s.worker.Stop()
 
+	if s.repWriter != nil {
+		s.repWriter.Stop()
+	}
+
 	if s.db != nil {
 		if err := s.db.Close(); err != nil {
 			logtrace.Error(ctx, "Failed to close database", logtrace.Fields{logtrace.FieldModule: "p2p", logtrace.FieldError: err.Error()})
 		}
 	}
+
 }
 
 // GetOwnCreatedAt func
@@ -734,7 +738,7 @@ func (s *Store) GetLocalKeys(from time.Time, to time.Time) ([]string, error) {
 	var keys []string
 	ctx := context.Background()
 	logtrace.Info(ctx, "getting all keys for SC", logtrace.Fields{})
-	if err := s.db.Select(&keys, `SELECT key FROM data WHERE createdAt > ? and createdAt < ?`, from, to); err != nil {
+	if err := s.db.SelectContext(ctx, &keys, `SELECT key FROM data WHERE createdAt > ? and createdAt < ?`, from, to); err != nil {
 		return keys, fmt.Errorf("error reading all keys from database: %w", err)
 	}
 	logtrace.Info(ctx, "got all keys for SC", logtrace.Fields{})
@@ -747,35 +751,6 @@ func (s *Store) BatchDeleteRecords(keys []string) error {
 	return batchDeleteRecords(s.db, keys)
 }
 
-func batchDeleteRecords(db *sqlx.DB, keys []string) error {
-	if len(keys) == 0 {
-		ctx := context.Background()
-		logtrace.Info(ctx, "no keys provided for batch delete", logtrace.Fields{logtrace.FieldModule: "p2p"})
-		return nil
-	}
-
-	// Create a parameter string for SQL query (?, ?, ?, ...)
-	paramStr := strings.Repeat("?,", len(keys)-1) + "?"
-
-	// Create the SQL statement
-	query := fmt.Sprintf("DELETE FROM data WHERE key IN (%s)", paramStr)
-
-	// Execute the query
-	res, err := db.Exec(query, stringArgsToInterface(keys)...)
-	if err != nil {
-		return fmt.Errorf("cannot batch delete records: %w", err)
-	}
-
-	// Optionally check rows affected
-	if rowsAffected, err := res.RowsAffected(); err != nil {
-		return fmt.Errorf("failed to get rows affected for batch delete: %w", err)
-	} else if rowsAffected == 0 {
-		return fmt.Errorf("no rows affected for batch delete")
-	}
-
-	return nil
-}
-
 // stringArgsToInterface converts a slice of strings to a slice of interface{}
 func stringArgsToInterface(args []string) []interface{} {
 	iargs := make([]interface{}, len(args))
@@ -785,28 +760,45 @@ func stringArgsToInterface(args []string) []interface{} {
 	return iargs
 }
 
+func batchDeleteRecords(db *sqlx.DB, keys []string) error {
+	if len(keys) == 0 {
+		logtrace.Info(context.Background(), "no keys provided for batch delete", logtrace.Fields{logtrace.FieldModule: "p2p"})
+		return nil
+	}
+	total := int64(0)
+	for _, chunk := range chunkStrings(keys, sqliteMaxVars) {
+		paramStr := strings.Repeat("?,", len(chunk)-1) + "?"
+		q := fmt.Sprintf("DELETE FROM data WHERE key IN (%s)", paramStr)
+		res, err := db.Exec(q, stringArgsToInterface(chunk)...)
+		if err != nil {
+			return fmt.Errorf("cannot batch delete records: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		total += n
+	}
+	if total == 0 {
+		return fmt.Errorf("no rows affected for batch delete")
+	}
+	return nil
+}
+
 func batchSetMigratedRecords(db *sqlx.DB, keys []string) error {
 	if len(keys) == 0 {
 		logtrace.Info(context.Background(), "no keys provided for batch update (migrated)", logtrace.Fields{logtrace.FieldModule: "p2p"})
 		return nil
 	}
-
-	// Create a parameter string for SQL query (?, ?, ?, ...)
-	paramStr := strings.Repeat("?,", len(keys)-1) + "?"
-
-	// Create the SQL statement
-	query := fmt.Sprintf("UPDATE data set data = X'', is_on_cloud = true WHERE key IN (%s)", paramStr)
-
-	// Execute the query
-	res, err := db.Exec(query, stringArgsToInterface(keys)...)
-	if err != nil {
-		return fmt.Errorf("cannot batch update records (migrated): %w", err)
+	total := int64(0)
+	for _, chunk := range chunkStrings(keys, sqliteMaxVars) {
+		paramStr := strings.Repeat("?,", len(chunk)-1) + "?"
+		q := fmt.Sprintf("UPDATE data SET data = X'', is_on_cloud = true WHERE key IN (%s)", paramStr)
+		res, err := db.Exec(q, stringArgsToInterface(chunk)...)
+		if err != nil {
+			return fmt.Errorf("cannot batch update records (migrated): %w", err)
+		}
+		n, _ := res.RowsAffected()
+		total += n
 	}
-
-	// Optionally check rows affected
-	if rowsAffected, err := res.RowsAffected(); err != nil {
-		return fmt.Errorf("failed to get rows affected for batch update(migrated): %w", err)
-	} else if rowsAffected == 0 {
+	if total == 0 {
 		return fmt.Errorf("no rows affected for batch update (migrated)")
 	}
 

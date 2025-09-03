@@ -52,43 +52,6 @@ type HashTable struct {
 	refreshers []time.Time
 }
 
-// NewHashTable returns a new hashtable
-func NewHashTable(options *Options) (*HashTable, error) {
-	ht := &HashTable{
-		self: &Node{
-			IP:   options.IP,
-			Port: options.Port,
-		},
-		refreshers: make([]time.Time, B),
-		routeTable: make([][]*Node, B),
-	}
-	// init the id for hashtable
-	if options.ID != nil {
-		ht.self.ID = options.ID
-	} else {
-		return nil, errors.New("id is nil")
-	}
-	ht.self.SetHashedID()
-
-	// reset the refresh time for every bucket
-	for i := 0; i < B; i++ {
-		ht.resetRefreshTime(i)
-	}
-
-	return ht, nil
-}
-
-// ensureHashedTarget normalizes a comparator target into the Kademlia ID space (32 bytes).
-// If the provided target is not 32 bytes, it is hashed via Blake3; otherwise it is used as-is.
-// This centralizes the "is target already a hash?" logic to prevent accidental misuse.
-func ensureHashedTarget(target []byte) []byte {
-	if len(target) != 32 {
-		h, _ := utils.Blake3Hash(target)
-		return h
-	}
-	return target
-}
-
 // resetRefreshTime - reset the refresh time
 func (ht *HashTable) resetRefreshTime(bucket int) {
 	ht.refMutex.Lock()
@@ -186,92 +149,6 @@ func (ht *HashTable) randomIDFromBucket(bucket int) []byte {
 	return id
 }
 
-// hasBucketNode check if the node id is existed in the bucket
-func (ht *HashTable) hasBucketNode(bucket int, id []byte) bool {
-	ht.mutex.RLock()
-	defer ht.mutex.RUnlock()
-
-	for _, node := range ht.routeTable[bucket] {
-		if bytes.Equal(node.ID, id) {
-			return true
-		}
-	}
-
-	return false
-}
-
-// hasNode check if the node id is exists in the hash table
-func (ht *HashTable) hasNode(id []byte) bool {
-	ht.mutex.RLock()
-	defer ht.mutex.RUnlock()
-
-	for _, bucket := range ht.routeTable {
-		for _, node := range bucket {
-			if bytes.Equal(node.ID, id) {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-// closestContacts returns the closest contacts of target
-func (ht *HashTable) closestContacts(num int, target []byte, ignoredNodes []*Node) (*NodeList, int) {
-	ht.mutex.RLock()
-	defer ht.mutex.RUnlock()
-
-	// Normalize target into hashed ID space (32 bytes)
-	hashedTarget := ensureHashedTarget(target)
-
-	// Convert ignoredNodes slice to a map for faster lookup
-	ignoredMap := make(map[string]bool)
-	for _, node := range ignoredNodes {
-		ignoredMap[string(node.ID)] = true
-	}
-
-	nl := &NodeList{Comparator: hashedTarget}
-
-	counter := 0
-	// Flatten the routeTable and add nodes to nl if they're not in the ignoredMap
-	for _, bucket := range ht.routeTable {
-		for _, node := range bucket {
-			counter++
-			if !ignoredMap[string(node.ID)] {
-				nl.AddNodes([]*Node{node})
-			}
-		}
-	}
-
-	// Sort the node list and get the top 'num' nodes
-	nl.Sort()
-	nl.TopN(num)
-
-	return nl, counter
-}
-
-// bucketIndex return the bucket index from two node ids
-func (*HashTable) bucketIndex(id1 []byte, id2 []byte) int {
-	// look at each byte from left to right
-	for j := 0; j < len(id1); j++ {
-		// xor the byte
-		xor := id1[j] ^ id2[j]
-
-		// check each bit on the xored result from left to right in order
-		for i := 0; i < 8; i++ {
-			if hasBit(xor, uint(i)) {
-				byteIndex := j * 8 // Convert byte position to bit position
-				bitIndex := i
-				// Return bucket index based on position of differing bit (B - total bit position - 1)
-				return B - (byteIndex + bitIndex) - 1
-			}
-		}
-	}
-
-	// only happen during bootstrap ping
-	return 0
-}
-
 // Count returns the number of nodes in route table
 func (ht *HashTable) totalCount() int {
 	ht.mutex.RLock()
@@ -282,25 +159,6 @@ func (ht *HashTable) totalCount() int {
 		num += len(v)
 	}
 	return num
-}
-
-// nodes returns nodes in table
-func (ht *HashTable) nodes() []*Node {
-	nodeList := []*Node{}
-	ht.mutex.RLock()
-	defer ht.mutex.RUnlock()
-
-	for _, v := range ht.routeTable {
-		nodeList = append(nodeList, v...)
-	}
-	return nodeList
-}
-
-// newRandomID returns a new random id
-func newRandomID() ([]byte, error) {
-	id := make([]byte, 20)
-	_, err := rand.Read(id)
-	return id, err
 }
 
 // Simple helper function to determine the value of a particular
@@ -314,95 +172,70 @@ func hasBit(n byte, pos uint) bool {
 	return (val > 0)
 }
 
-func (ht *HashTable) closestContactsWithInlcudingNode(num int, target []byte, ignoredNodes []*Node, includeNode *Node) *NodeList {
-	ht.mutex.RLock()
-	defer ht.mutex.RUnlock()
-
-	// Normalize target into hashed ID space (32 bytes)
-	hashedTarget := ensureHashedTarget(target)
-	// Convert ignoredNodes slice to a map for faster lookup
-	ignoredMap := make(map[string]bool)
-	for _, node := range ignoredNodes {
-		ignoredMap[string(node.ID)] = true
+// NewHashTable returns a new hashtable
+func NewHashTable(options *Options) (*HashTable, error) {
+	ht := &HashTable{
+		self:       &Node{IP: options.IP, Port: options.Port},
+		refreshers: make([]time.Time, B),
+		routeTable: make([][]*Node, B),
 	}
-
-	nl := &NodeList{Comparator: hashedTarget}
-
-	// Flatten the routeTable and add nodes to nl if they're not in the ignoredMap
-	for _, bucket := range ht.routeTable {
-		for _, node := range bucket {
-			if !ignoredMap[string(node.ID)] {
-				nl.AddNodes([]*Node{node})
-			}
-		}
+	if options.ID != nil {
+		ht.self.ID = options.ID
+	} else {
+		return nil, errors.New("id is nil")
 	}
+	ht.self.SetHashedID()
 
-	// Add the included node (if any) to the list
-	if includeNode != nil {
-		nl.AddNodes([]*Node{includeNode})
+	// init buckets with capacity K and refresh times
+	for i := 0; i < B; i++ {
+		ht.routeTable[i] = make([]*Node, 0, K)
+		ht.resetRefreshTime(i)
 	}
-
-	// Sort the node list and get the top 'num' nodes
-	nl.Sort()
-	nl.TopN(num)
-
-	return nl
+	return ht, nil
 }
 
-func (ht *HashTable) closestContactsWithIncludingNodeList(num int, target []byte, ignoredNodes []*Node, nodesToInclude []*Node) *NodeList {
-	ht.mutex.RLock()
-	defer ht.mutex.RUnlock()
-
-	// Normalize target into hashed ID space (32 bytes). Callers often pass a 32-byte
-	// content hash already, but centralizing this avoids future misuse.
-	hashedTarget := ensureHashedTarget(target)
-
-	// Convert ignoredNodes slice to a map for faster lookup
-	ignoredMap := make(map[string]bool)
-	for _, node := range ignoredNodes {
-		ignoredMap[string(node.ID)] = true
+// --- identity normalization for routing distance
+func ensureHashedTarget(target []byte) []byte {
+	if len(target) != 32 {
+		h, _ := utils.Blake3Hash(target)
+		return h
 	}
-
-	nl := &NodeList{Comparator: hashedTarget}
-
-	// Flatten the routeTable and add nodes to nl if they're not in the ignoredMap
-	counter := 0
-	for _, bucket := range ht.routeTable {
-		for _, node := range bucket {
-			if !ignoredMap[string(node.ID)] {
-				counter++
-				nl.AddNodes([]*Node{node})
-			}
-		}
-	}
-
-	// Add the included node (if any) to the list
-	var includeNodeList []*Node
-	if nodesToInclude != nil {
-		for _, node := range nodesToInclude {
-			if !nl.exists(node) {
-				includeNodeList = append(includeNodeList, node)
-			}
-		}
-
-		nl.AddNodes(includeNodeList)
-	}
-
-	// Sort the node list and get the top 'num' nodes
-	nl.Sort()
-	nl.TopN(num)
-
-	return nl
+	return target
 }
 
-// RemoveNode removes node from bucket
-func (ht *HashTable) RemoveNode(index int, id []byte) bool {
+// hasBucketNode: compare on HashedID
+func (ht *HashTable) hasBucketNode(bucket int, hashedID []byte) bool {
+	ht.mutex.RLock()
+	defer ht.mutex.RUnlock()
+	for _, node := range ht.routeTable[bucket] {
+		if bytes.Equal(node.HashedID, hashedID) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasNode: compare on HashedID
+func (ht *HashTable) hasNode(hashedID []byte) bool {
+	ht.mutex.RLock()
+	defer ht.mutex.RUnlock()
+	for _, bucket := range ht.routeTable {
+		for _, node := range bucket {
+			if bytes.Equal(node.HashedID, hashedID) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// RemoveNode: compare on HashedID
+func (ht *HashTable) RemoveNode(index int, hashedID []byte) bool {
 	ht.mutex.Lock()
 	defer ht.mutex.Unlock()
-
 	bucket := ht.routeTable[index]
 	for i, node := range bucket {
-		if bytes.Equal(node.ID, id) {
+		if bytes.Equal(node.HashedID, hashedID) {
 			if i+1 < len(bucket) {
 				bucket = append(bucket[:i], bucket[i+1:]...)
 			} else {
@@ -412,6 +245,197 @@ func (ht *HashTable) RemoveNode(index int, id []byte) bool {
 			return true
 		}
 	}
-
 	return false
+}
+
+// closestContacts: use HashedID in ignored-map
+func (ht *HashTable) closestContacts(num int, target []byte, ignoredNodes []*Node) (*NodeList, int) {
+	ht.mutex.RLock()
+	defer ht.mutex.RUnlock()
+
+	hashedTarget := ensureHashedTarget(target)
+
+	ignoredMap := make(map[string]bool, len(ignoredNodes))
+	for _, node := range ignoredNodes {
+		ignoredMap[string(node.HashedID)] = true
+	}
+
+	nl := &NodeList{Comparator: hashedTarget}
+	counter := 0
+	for _, bucket := range ht.routeTable {
+		for _, node := range bucket {
+			counter++
+			if !ignoredMap[string(node.HashedID)] {
+				nl.AddNodes([]*Node{node})
+			}
+		}
+	}
+	nl.Sort()
+	nl.TopN(num)
+	return nl, counter
+}
+
+// keep an alias for old callers; fix typo in new name
+func (ht *HashTable) closestContactsWithIncludingNode(num int, target []byte, ignoredNodes []*Node, includeNode *Node) *NodeList {
+	ht.mutex.RLock()
+	defer ht.mutex.RUnlock()
+
+	hashedTarget := ensureHashedTarget(target)
+	ignoredMap := make(map[string]bool, len(ignoredNodes))
+	for _, node := range ignoredNodes {
+		ignoredMap[string(node.HashedID)] = true
+	}
+
+	nl := &NodeList{Comparator: hashedTarget}
+	for _, bucket := range ht.routeTable {
+		for _, node := range bucket {
+			if !ignoredMap[string(node.HashedID)] {
+				nl.AddNodes([]*Node{node})
+			}
+		}
+	}
+	if includeNode != nil {
+		nl.AddNodes([]*Node{includeNode})
+	}
+	nl.Sort()
+	nl.TopN(num)
+	return nl
+}
+
+func (ht *HashTable) closestContactsWithIncludingNodeList(num int, target []byte, ignoredNodes []*Node, nodesToInclude []*Node) *NodeList {
+	ht.mutex.RLock()
+	defer ht.mutex.RUnlock()
+
+	hashedTarget := ensureHashedTarget(target)
+	ignoredMap := make(map[string]bool, len(ignoredNodes))
+	for _, node := range ignoredNodes {
+		ignoredMap[string(node.HashedID)] = true
+	}
+
+	nl := &NodeList{Comparator: hashedTarget}
+	for _, bucket := range ht.routeTable {
+		for _, node := range bucket {
+			if !ignoredMap[string(node.HashedID)] {
+				nl.AddNodes([]*Node{node})
+			}
+		}
+	}
+
+	if len(nodesToInclude) > 0 {
+		for _, node := range nodesToInclude {
+			if !nl.exists(node) {
+				nl.AddNodes([]*Node{node})
+			}
+		}
+	}
+
+	nl.Sort()
+	nl.TopN(num)
+	return nl
+}
+
+// bucketIndex: guard length
+func (*HashTable) bucketIndex(id1, id2 []byte) int {
+	if len(id1) != 32 || len(id2) != 32 {
+		// defensive: treat as far (top bucket)
+		return B - 1
+	}
+	for j := 0; j < len(id1); j++ {
+		xor := id1[j] ^ id2[j]
+		for i := 0; i < 8; i++ {
+			if hasBit(xor, uint(i)) {
+				byteIndex := j * 8
+				bitIndex := i
+				return B - (byteIndex + bitIndex) - 1
+			}
+		}
+	}
+	return 0 // identical IDs
+}
+
+// nodes: optional safe snapshot (shallow copy of slice; caller must not mutate Nodes)
+func (ht *HashTable) nodes() []*Node {
+	ht.mutex.RLock()
+	defer ht.mutex.RUnlock()
+	total := 0
+	for _, b := range ht.routeTable {
+		total += len(b)
+	}
+	out := make([]*Node, 0, total)
+	for _, b := range ht.routeTable {
+		out = append(out, b...)
+	}
+	return out
+}
+
+// newRandomID: match B=256 (32 bytes)
+func newRandomID() ([]byte, error) {
+	id := make([]byte, B/8)
+	_, err := rand.Read(id)
+	return id, err
+}
+
+// AddOrUpdate inserts or refreshes LRU for a node (updates IP/Port on change).
+func (ht *HashTable) AddOrUpdate(n *Node) {
+	if n == nil || len(n.ID) == 0 {
+		return
+	}
+	n.SetHashedID()
+
+	ht.mutex.Lock()
+	defer ht.mutex.Unlock()
+	bi := ht.bucketIndex(ht.self.HashedID, n.HashedID)
+	b := ht.routeTable[bi]
+
+	// Refresh if present
+	for i, v := range b {
+		if bytes.Equal(v.HashedID, n.HashedID) {
+			v.IP, v.Port = n.IP, n.Port // refresh coordinates
+			cur := b[i]
+			b = append(b[:i], b[i+1:]...)
+			b = append(b, cur)
+			ht.routeTable[bi] = b
+			ht.resetRefreshTime(bi)
+			return
+		}
+	}
+	// Insert if space
+	if len(b) < K {
+		ht.routeTable[bi] = append(b, n)
+		ht.resetRefreshTime(bi)
+		return
+	}
+	// Else: bucket full; caller should ping LRU and then call ReplaceLRUIf(...)
+}
+
+func (ht *HashTable) LRUForBucket(n *Node) *Node {
+	if n == nil || len(n.HashedID) != 32 {
+		return nil
+	}
+	ht.mutex.RLock()
+	defer ht.mutex.RUnlock()
+	bi := ht.bucketIndex(ht.self.HashedID, n.HashedID)
+	if len(ht.routeTable[bi]) == 0 {
+		return nil
+	}
+	return ht.routeTable[bi][0]
+}
+
+func (ht *HashTable) ReplaceLRUIf(n, lru *Node) bool {
+	if n == nil || lru == nil {
+		return false
+	}
+	n.SetHashedID()
+	ht.mutex.Lock()
+	defer ht.mutex.Unlock()
+	bi := ht.bucketIndex(ht.self.HashedID, n.HashedID)
+	b := ht.routeTable[bi]
+	if len(b) == 0 || !bytes.Equal(b[0].HashedID, lru.HashedID) {
+		return false // LRU moved meanwhile
+	}
+	b = b[1:]
+	b = append(b, n)
+	ht.routeTable[bi] = b
+	ht.resetRefreshTime(bi)
+	return true
 }

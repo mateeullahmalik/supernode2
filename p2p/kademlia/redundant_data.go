@@ -80,7 +80,7 @@ func (s *DHT) cleanupRedundantDataWorker(ctx context.Context) {
 
 	for i := 0; i < len(replicationKeys); i++ {
 		decKey, _ := hex.DecodeString(replicationKeys[i].Key)
-		nodes := s.ht.closestContactsWithInlcudingNode(Alpha, decKey, ignores, self)
+		nodes := s.ht.closestContactsWithIncludingNode(Alpha, decKey, ignores, self)
 		closestContactsMap[replicationKeys[i].Key] = nodes.NodeIDs()
 	}
 

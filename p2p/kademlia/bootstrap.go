@@ -3,51 +3,52 @@ package kademlia
 import (
 	"context"
 	"fmt"
+	"net"
+	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/LumeraProtocol/supernode/v2/p2p/kademlia/domain"
 	"github.com/LumeraProtocol/supernode/v2/pkg/errors"
-
 	"github.com/LumeraProtocol/supernode/v2/pkg/logtrace"
 	ltc "github.com/LumeraProtocol/supernode/v2/pkg/net/credentials"
 )
 
 const (
-	bootstrapRetryInterval  = 10
-	badAddrExpiryHours      = 12
-	defaultSuperNodeP2PPort = 4445
+	bootstrapRefreshInterval     = 10 * time.Minute
+	defaultSuperNodeP2PPort  int = 4445
 )
 
+// seed a couple of obviously bad addrs (unless in integration tests)
 func (s *DHT) skipBadBootstrapAddrs() {
-	//skipAddress1 := fmt.Sprintf("%s:%d", "127.0.0.1", s.options.Port)
-	//skipAddress2 := fmt.Sprintf("%s:%d", "localhost", s.options.Port)
-	//s.cache.Set(skipAddress1, []byte("true"))
-	//s.cache.Set(skipAddress2, []byte("true"))
+	isTest := os.Getenv("INTEGRATION_TEST") == "true"
+	if isTest {
+		return
+	}
+	s.cache.Set(fmt.Sprintf("%s:%d", "127.0.0.1", s.options.Port), []byte("true"))
+	s.cache.Set(fmt.Sprintf("%s:%d", "localhost", s.options.Port), []byte("true"))
 }
+
+// parseNode parses "host[:port]" into a Node with basic address hygiene.
+// Loopback/private allow-listed only in integration tests.
 func (s *DHT) parseNode(extP2P string, selfAddr string) (*Node, error) {
 	if extP2P == "" {
 		return nil, errors.New("empty address")
 	}
-
 	if extP2P == selfAddr {
 		return nil, errors.New("self address")
 	}
-
 	if _, err := s.cache.Get(extP2P); err == nil {
-		return nil, errors.New("configure: skip bad p2p boostrap addr")
+		return nil, errors.New("skip cached-bad bootstrap addr")
 	}
 
 	// Extract IP and port from the address
 	var ip string
 	var port uint16
-
 	if idx := strings.LastIndex(extP2P, ":"); idx != -1 {
 		ip = extP2P[:idx]
 		portStr := extP2P[idx+1:]
-
-		// If we have a port in the address, parse it
 		if portStr != "" {
 			portNum, err := strconv.ParseUint(portStr, 10, 16)
 			if err != nil {
@@ -56,33 +57,44 @@ func (s *DHT) parseNode(extP2P string, selfAddr string) (*Node, error) {
 			port = uint16(portNum)
 		}
 	} else {
-		// No port in the address
 		ip = extP2P
-		port = defaultSuperNodeP2PPort
+		port = uint16(defaultSuperNodeP2PPort)
 	}
-
 	if ip == "" {
 		return nil, errors.New("empty ip")
 	}
 
-	// Create the node with the correct IP and port
-	return &Node{
-		IP:   ip,
-		Port: port,
-	}, nil
+	// Hygiene: reject non-routables unless in integration tests
+	isTest := os.Getenv("INTEGRATION_TEST") == "true"
+	if parsed := net.ParseIP(ip); parsed != nil {
+		if parsed.IsUnspecified() || parsed.IsLinkLocalUnicast() || parsed.IsLinkLocalMulticast() {
+			return nil, errors.New("non-routable address")
+		}
+		if parsed.IsLoopback() && !isTest {
+			return nil, errors.New("loopback not allowed")
+		}
+		if parsed.IsPrivate() && !isTest {
+			return nil, errors.New("private address not allowed")
+		}
+	}
+
+	return &Node{IP: ip, Port: port}, nil
 }
 
-// setBootstrapNodesFromConfigVar parses config.bootstrapNodes and sets them
-// as the bootstrap nodes - As of now, this is only supposed to be used for testing
+// setBootstrapNodesFromConfigVar parses CSV of Lumera addresses and fills s.options.BootstrapNodes.
+// Intended for tests / controlled runs (no pings here).
 func (s *DHT) setBootstrapNodesFromConfigVar(ctx context.Context, bootstrapNodes string) error {
-	nodes := []*Node{}
+	nodes := make([]*Node, 0, 8)
 	bsNodes := strings.Split(bootstrapNodes, ",")
 	for _, bsNode := range bsNodes {
-		lumeraAddress, err := ltc.ParseLumeraAddress(bsNode)
+		addr := strings.TrimSpace(bsNode)
+		if addr == "" {
+			continue
+		}
+		lumeraAddress, err := ltc.ParseLumeraAddress(addr)
 		if err != nil {
 			return fmt.Errorf("setBootstrapNodesFromConfigVar: %w", err)
 		}
-
 		nodes = append(nodes, &Node{
 			ID:   []byte(lumeraAddress.Identity),
 			IP:   lumeraAddress.Host,
@@ -94,320 +106,215 @@ func (s *DHT) setBootstrapNodesFromConfigVar(ctx context.Context, bootstrapNodes
 		logtrace.FieldModule: "p2p",
 		"bootstrap_nodes":    nodes,
 	})
-
 	return nil
 }
 
-// loadBootstrapCandidatesFromChain queries the chain and builds a map of candidate nodes
-// keyed by their full "ip:port" address. Only active supernodes are considered and the
-// latest published IP and p2p port are used.
+// loadBootstrapCandidatesFromChain returns active supernodes (by latest state)
+// mapped by "ip:port". No pings here.
 func (s *DHT) loadBootstrapCandidatesFromChain(ctx context.Context, selfAddress string) (map[string]*Node, error) {
-	// Get all supernodes
-	supernodeResp, err := s.options.LumeraClient.SuperNode().ListSuperNodes(ctx)
+	resp, err := s.options.LumeraClient.SuperNode().ListSuperNodes(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get top supernodes: %w", err)
+		return nil, fmt.Errorf("failed to list supernodes: %w", err)
 	}
 
-	mapNodes := make(map[string]*Node, len(supernodeResp.Supernodes))
-
-	for _, supernode := range supernodeResp.Supernodes {
-		// Skip non-active supernodes - find latest state by height
-		if len(supernode.States) == 0 {
+	mapNodes := make(map[string]*Node, len(resp.Supernodes))
+	for _, sn := range resp.Supernodes {
+		if len(sn.States) == 0 {
 			continue
 		}
-
-		var latestState int32 = 0
+		var latestState int32
 		var maxStateHeight int64 = -1
-		for _, state := range supernode.States {
-			if state.Height > maxStateHeight {
-				maxStateHeight = state.Height
-				latestState = int32(state.State)
+		for _, st := range sn.States {
+			if st.Height > maxStateHeight {
+				maxStateHeight = st.Height
+				latestState = int32(st.State)
 			}
 		}
-
 		if latestState != 1 { // SuperNodeStateActive = 1
 			continue
 		}
 
-		// Find the latest IP address (with highest block height)
+		// latest IP by height
 		var latestIP string
 		var maxHeight int64 = -1
-		for _, ipHistory := range supernode.PrevIpAddresses {
-			if ipHistory.Height > maxHeight {
-				maxHeight = ipHistory.Height
-				latestIP = ipHistory.Address
+		for _, ipHist := range sn.PrevIpAddresses {
+			if ipHist.Height > maxHeight {
+				maxHeight = ipHist.Height
+				latestIP = ipHist.Address
 			}
 		}
-
 		if latestIP == "" {
-			logtrace.Warn(ctx, "No valid IP address found for supernode", logtrace.Fields{
+			logtrace.Warn(ctx, "No valid IP for supernode", logtrace.Fields{
 				logtrace.FieldModule: "p2p",
-				"supernode":          supernode.SupernodeAccount,
+				"supernode":          sn.SupernodeAccount,
 			})
 			continue
 		}
-
-		// Extract IP from the address (remove port if present)
 		ip := parseSupernodeAddress(latestIP)
 
-		// Use p2p_port from supernode record
 		p2pPort := defaultSuperNodeP2PPort
-		if supernode.P2PPort != "" {
-			if port, err := strconv.ParseUint(supernode.P2PPort, 10, 16); err == nil {
+		if sn.P2PPort != "" {
+			if port, err := strconv.ParseUint(sn.P2PPort, 10, 16); err == nil {
 				p2pPort = int(port)
 			}
 		}
 
-		// Create full address with p2p port for validation
-		fullAddress := fmt.Sprintf("%s:%d", ip, p2pPort)
-
-		// Parse the node from the full address
-		node, err := s.parseNode(fullAddress, selfAddress)
+		full := fmt.Sprintf("%s:%d", ip, p2pPort)
+		node, err := s.parseNode(full, selfAddress)
 		if err != nil {
-			logtrace.Warn(ctx, "Skip Bad Bootstrap Address", logtrace.Fields{
+			logtrace.Warn(ctx, "Skipping bootstrap candidate (bad addr)", logtrace.Fields{
 				logtrace.FieldModule: "p2p",
 				logtrace.FieldError:  err.Error(),
-				"address":            fullAddress,
-				"supernode":          supernode.SupernodeAccount,
+				"address":            full,
+				"supernode":          sn.SupernodeAccount,
 			})
 			continue
 		}
-
-		// Store the supernode account as the node ID
-		node.ID = []byte(supernode.SupernodeAccount)
-		mapNodes[fullAddress] = node
+		node.ID = []byte(sn.SupernodeAccount)
+		mapNodes[full] = node
 	}
-
 	return mapNodes, nil
 }
 
-// filterResponsiveByKademliaPing sends a Kademlia Ping RPC to each node and returns
-// only those that respond successfully.
-func (s *DHT) filterResponsiveByKademliaPing(ctx context.Context, nodes []*Node) []*Node {
-	maxInFlight := 32
-	if len(nodes) < maxInFlight {
-		maxInFlight = len(nodes)
+// upsertBootstrapNode inserts/updates replication_info for the discovered node (Active=false).
+// No pings or routing decisions here; the health loop will manage Active/LastSeen.
+func (s *DHT) upsertBootstrapNode(ctx context.Context, n *Node) error {
+	now := time.Now().UTC()
+	exists, err := s.store.RecordExists(string(n.ID))
+	if err != nil {
+		return fmt.Errorf("check replication record: %w", err)
 	}
-	if maxInFlight < 1 {
-		maxInFlight = 1
+	info := domain.NodeReplicationInfo{
+		ID:         n.ID,
+		IP:         n.IP,
+		Port:       n.Port,
+		Active:     false, // health loop flips to true when node responds
+		IsAdjusted: false,
+		UpdatedAt:  now,
 	}
-
-	type result struct {
-		node  *Node
-		alive bool
+	if exists {
+		return s.store.UpdateReplicationInfo(ctx, info)
 	}
+	return s.store.AddReplicationInfo(ctx, info)
+}
 
-	sem := make(chan struct{}, maxInFlight)
-	resCh := make(chan result, len(nodes))
-	var wg sync.WaitGroup
+// seedRoutingFromDB adds nodes (from replication_info) into the routing table (in-memory only).
+// Cheap; improves initial graph connectivity without pings.
+func (s *DHT) seedRoutingFromDB(ctx context.Context) {
+	repInfo, err := s.store.GetAllReplicationInfo(ctx)
+	if err != nil {
+		logtrace.Warn(ctx, "seed routing: get replication info failed", logtrace.Fields{
+			logtrace.FieldModule: "p2p",
+			logtrace.FieldError:  err.Error(),
+		})
+		return
+	}
+	for _, ri := range repInfo {
+		if len(ri.ID) == 0 || ri.IP == "" || ri.Port == 0 {
+			continue
+		}
+		n := &Node{ID: ri.ID, IP: ri.IP, Port: ri.Port}
+		s.addNode(ctx, n)
+	}
+}
 
-	for _, n := range nodes {
-		n := n
-		wg.Add(1)
-		sem <- struct{}{}
-		go func() {
-			defer wg.Done()
-			defer func() { <-sem }()
-			req := s.newMessage(Ping, n, nil)
-			pctx, cancel := context.WithTimeout(ctx, defaultPingTime)
-			defer cancel()
-			_, err := s.network.Call(pctx, req, false)
-			if err != nil {
-				// penalize, but Bootstrap will still retry independently
-				s.ignorelist.IncrementCount(n)
-				logtrace.Debug(ctx, "kademlia ping failed during configure", logtrace.Fields{
+// SyncBootstrapOnce pulls candidates (config var or chain), upserts them into replication_info,
+// populates s.options.BootstrapNodes, and seeds the routing table. No pings here.
+func (s *DHT) SyncBootstrapOnce(ctx context.Context, bootstrapNodes string) error {
+	s.skipBadBootstrapAddrs()
+
+	// If config var provided, prefer that (tests)
+	if strings.TrimSpace(bootstrapNodes) != "" {
+		if err := s.setBootstrapNodesFromConfigVar(ctx, bootstrapNodes); err != nil {
+			return err
+		}
+		for _, n := range s.options.BootstrapNodes {
+			if err := s.upsertBootstrapNode(ctx, n); err != nil {
+				logtrace.Warn(ctx, "bootstrap upsert failed", logtrace.Fields{
 					logtrace.FieldModule: "p2p",
 					logtrace.FieldError:  err.Error(),
 					"node":               n.String(),
 				})
-				resCh <- result{node: n, alive: false}
-				return
 			}
-			resCh <- result{node: n, alive: true}
-		}()
-	}
-
-	wg.Wait()
-	close(resCh)
-
-	filtered := make([]*Node, 0, len(nodes))
-	for r := range resCh {
-		if r.alive {
-			filtered = append(filtered, r.node)
 		}
-	}
-	return filtered
-}
-
-// ConfigureBootstrapNodes connects with lumera client & gets p2p boostrap ip & port
-func (s *DHT) ConfigureBootstrapNodes(ctx context.Context, bootstrapNodes string) error {
-	if bootstrapNodes != "" {
-		return s.setBootstrapNodesFromConfigVar(ctx, bootstrapNodes)
+		s.seedRoutingFromDB(ctx)
+		return nil
 	}
 
+	// From chain
 	supernodeAddr, err := s.getSupernodeAddress(ctx)
 	if err != nil {
 		return fmt.Errorf("get supernode address: %s", err)
 	}
 	selfAddress := fmt.Sprintf("%s:%d", parseSupernodeAddress(supernodeAddr), s.options.Port)
 
-	// Load bootstrap candidates from chain
-	mapNodes, err := s.loadBootstrapCandidatesFromChain(ctx, selfAddress)
+	cands, err := s.loadBootstrapCandidatesFromChain(ctx, selfAddress)
 	if err != nil {
 		return err
 	}
 
-	// Build candidate list and filter only those that respond to Kademlia Ping
-	candidates := make([]*Node, 0, len(mapNodes))
-	for _, n := range mapNodes {
-		candidates = append(candidates, n)
-	}
-	pingResponsive := s.filterResponsiveByKademliaPing(ctx, candidates)
-	if len(pingResponsive) == 0 {
-		logtrace.Error(ctx, "no bootstrap nodes responded to Kademlia ping", logtrace.Fields{logtrace.FieldModule: "p2p"})
-		return nil
-	}
-
-	for _, node := range pingResponsive {
-		logtrace.Info(ctx, "adding p2p bootstrap node", logtrace.Fields{
-			logtrace.FieldModule: "p2p",
-			"bootstap_ip":        node.IP,
-			"bootstrap_port":     node.Port,
-			"node_id":            string(node.ID),
-		})
-	}
-
-	s.options.BootstrapNodes = append(s.options.BootstrapNodes, pingResponsive...)
-
-	return nil
-}
-
-// Bootstrap attempts to bootstrap the network using the BootstrapNodes provided
-// to the Options struct
-func (s *DHT) Bootstrap(ctx context.Context, bootstrapNodes string) error {
-	if len(s.options.BootstrapNodes) == 0 {
-		time.AfterFunc(bootstrapRetryInterval*time.Minute, func() {
-			s.retryBootstrap(ctx, bootstrapNodes)
-		})
-
-		return nil
-	}
-
-	var wg sync.WaitGroup
-	for _, node := range s.options.BootstrapNodes {
-		nodeId := string(node.ID)
-		// sync the bootstrap node only once
-		val, exists := s.bsConnected.Load(nodeId)
-		if exists {
-			isConnected, _ := val.(bool)
-			if isConnected {
-				continue
-			}
-		}
-
-		addr := fmt.Sprintf("%s:%v", node.IP, node.Port)
-		if _, err := s.cache.Get(addr); err == nil {
-			logtrace.Info(ctx, "skip bad p2p boostrap addr", logtrace.Fields{
+	// Upsert candidates to replication_info
+	seen := make(map[string]struct{}, len(cands))
+	s.options.BootstrapNodes = s.options.BootstrapNodes[:0]
+	for _, n := range cands {
+		if err := s.upsertBootstrapNode(ctx, n); err != nil {
+			logtrace.Warn(ctx, "bootstrap upsert failed", logtrace.Fields{
 				logtrace.FieldModule: "p2p",
-				"addr":               addr,
+				logtrace.FieldError:  err.Error(),
+				"node":               n.String(),
 			})
 			continue
 		}
-
-		node := node
-		s.bsConnected.Store(nodeId, false)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-
-			// new a ping request message
-			request := s.newMessage(Ping, node, nil)
-			// new a context with timeout
-			ctx, cancel := context.WithTimeout(ctx, defaultPingTime)
-			defer cancel()
-
-			// invoke the request and handle the response
-			for i := 0; i < 5; i++ {
-				response, err := s.network.Call(ctx, request, false)
-				if err != nil {
-					// This happening in bootstrap - so potentially other nodes not yet started
-					// So if bootstrap failed, should try to connect to node again for next bootstrap retry
-					// Mark this address as temporarily bad to avoid retrying immediately
-					s.cache.SetWithExpiry(addr, []byte("true"), badAddrExpiryHours*time.Hour)
-
-					logtrace.Debug(ctx, "network call failed, sleeping 3 seconds", logtrace.Fields{
-						logtrace.FieldModule: "p2p",
-						logtrace.FieldError:  err.Error(),
-					})
-					time.Sleep(5 * time.Second)
-					continue
-				}
-				logtrace.Debug(ctx, "ping response", logtrace.Fields{
-					logtrace.FieldModule: "p2p",
-					"response":           response.String(),
-				})
-
-				// add the node to the route table
-				logtrace.Debug(ctx, "add-node params", logtrace.Fields{
-					logtrace.FieldModule: "p2p",
-					"sender-id":          string(response.Sender.ID),
-					"sender-ip":          string(response.Sender.IP),
-					"sender-port":        response.Sender.Port,
-				})
-
-				if len(response.Sender.ID) != len(s.ht.self.ID) {
-					logtrace.Error(ctx, "self ID && sender ID len don't match", logtrace.Fields{
-						logtrace.FieldModule: "p2p",
-						"sender-id":          string(response.Sender.ID),
-						"self-id":            string(s.ht.self.ID),
-					})
-
-					continue
-				}
-
-				s.bsConnected.Store(nodeId, true)
-				s.addNode(ctx, response.Sender)
-				break
-			}
-		}()
-	}
-
-	// wait until all are done
-	wg.Wait()
-
-	// if it has nodes in queries route tables
-	if s.ht.totalCount() > 0 {
-		// iterative find node from the nodes
-		if _, err := s.iterate(ctx, IterateFindNode, s.ht.self.ID, nil, 0); err != nil {
-			logtrace.Error(ctx, "iterative find node failed", logtrace.Fields{
-				logtrace.FieldModule: "p2p",
-				logtrace.FieldError:  err.Error(),
-			})
-			return err
+		if _, ok := seen[string(n.ID)]; ok {
+			continue
 		}
-	} else {
-		time.AfterFunc(bootstrapRetryInterval*time.Minute, func() {
-			s.retryBootstrap(ctx, bootstrapNodes)
-		})
+		s.options.BootstrapNodes = append(s.options.BootstrapNodes, n)
+		seen[string(n.ID)] = struct{}{}
 	}
 
+	// Seed routing
+	s.seedRoutingFromDB(ctx)
 	return nil
 }
 
-func (s *DHT) retryBootstrap(ctx context.Context, bootstrapNodes string) {
-	if err := s.ConfigureBootstrapNodes(ctx, bootstrapNodes); err != nil {
-		logtrace.Error(ctx, "retry failed to get bootstap ip", logtrace.Fields{
-			logtrace.FieldModule: "p2p",
-			logtrace.FieldError:  err.Error(),
-		})
-		return
+// StartBootstrapRefresher runs SyncBootstrapOnce every 10 minutes (idempotent upserts).
+// This keeps replication_info and routing table current as the validator set changes.
+func (s *DHT) StartBootstrapRefresher(ctx context.Context, bootstrapNodes string) {
+	go func() {
+		// Initial sync
+		if err := s.SyncBootstrapOnce(ctx, bootstrapNodes); err != nil {
+			logtrace.Warn(ctx, "initial bootstrap sync failed", logtrace.Fields{
+				logtrace.FieldModule: "p2p",
+				logtrace.FieldError:  err.Error(),
+			})
+		}
+		t := time.NewTicker(bootstrapRefreshInterval)
+		defer t.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if err := s.SyncBootstrapOnce(ctx, bootstrapNodes); err != nil {
+					logtrace.Warn(ctx, "periodic bootstrap sync failed", logtrace.Fields{
+						logtrace.FieldModule: "p2p",
+						logtrace.FieldError:  err.Error(),
+					})
+				}
+			}
+		}
+	}()
+}
+
+// ConfigureBootstrapNodes wires to the new sync/refresher (no pings here).
+func (s *DHT) ConfigureBootstrapNodes(ctx context.Context, bootstrapNodes string) error {
+	// One-time sync; start refresher in the background
+	if err := s.SyncBootstrapOnce(ctx, bootstrapNodes); err != nil {
+		return err
 	}
 
-	// join the kademlia network if bootstrap nodes is set
-	if err := s.Bootstrap(ctx, bootstrapNodes); err != nil {
-		logtrace.Error(ctx, "retry failed - bootstrap the node.", logtrace.Fields{
-			logtrace.FieldModule: "p2p",
-			logtrace.FieldError:  err.Error(),
-		})
-	}
+	s.StartBootstrapRefresher(ctx, bootstrapNodes)
+
+	return nil
 }

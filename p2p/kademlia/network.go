@@ -40,20 +40,20 @@ var execTimeouts map[int]time.Duration
 func init() {
 	// Initialize the request execution timeout values
 	execTimeouts = map[int]time.Duration{
-		// Lightweight RPCs
+		// Lightweight
 		Ping:          5 * time.Second,
 		FindNode:      15 * time.Second,
 		BatchFindNode: 15 * time.Second,
 
 		// Value lookups
 		FindValue:       20 * time.Second,
-		BatchFindValues: 60 * time.Second, // large responses, often compressed
-		BatchGetValues:  60 * time.Second,
+		BatchFindValues: 90 * time.Second,
+		BatchGetValues:  90 * time.Second,
 
 		// Data movement
-		StoreData:      30 * time.Second, // allow for slower links
-		BatchStoreData: 60 * time.Second,
-		Replicate:      60 * time.Second,
+		StoreData:      5 * time.Second,
+		BatchStoreData: 90 * time.Second,
+		Replicate:      90 * time.Second,
 	}
 }
 
@@ -86,6 +86,7 @@ func NewNetwork(ctx context.Context, dht *DHT, self *Node, clientTC, serverTC cr
 	}
 	// init the rate limiter
 	s.limiter = ratelimit.New(defaultConnRate)
+	s.connPool.StartPruner(ctx, 10*time.Minute, 1*time.Hour)
 
 	addr := fmt.Sprintf("%s:%d", self.IP, self.Port)
 	// new tcp listener
@@ -344,6 +345,9 @@ func (s *Network) handleReplicateRequest(ctx context.Context, req *ReplicateData
 func (s *Network) handlePing(_ context.Context, message *Message) ([]byte, error) {
 	// new a response message
 	resMsg := s.dht.newMessage(Ping, message.Sender, nil)
+
+	go s.dht.addNode(context.Background(), message.Sender)
+
 	return s.encodeMesage(resMsg)
 }
 
@@ -373,7 +377,7 @@ func (s *Network) handleConn(ctx context.Context, rawConn net.Conn) {
 
 	defer conn.Close()
 
-	const serverReadTimeout = 60 * time.Second
+	const serverReadTimeout = 90 * time.Second
 
 	for {
 		select {
@@ -393,11 +397,11 @@ func (s *Network) handleConn(ctx context.Context, rawConn net.Conn) {
 			}
 			// downgrade pure timeouts to debug to reduce noise
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
-				logtrace.Debug(ctx, "Read and decode timed out", logtrace.Fields{
+				logtrace.Debug(ctx, "Read and decode timed out, keeping connection open", logtrace.Fields{
 					logtrace.FieldModule: "p2p",
 					logtrace.FieldError:  err.Error(),
 				})
-				return
+				continue
 			}
 			logtrace.Warn(ctx, "Read and decode failed", logtrace.Fields{
 				logtrace.FieldModule: "p2p",
@@ -580,7 +584,7 @@ func (s *Network) serve(ctx context.Context) {
 				if max := 1 * time.Second; tempDelay > max {
 					tempDelay = max
 				}
-				logtrace.Error(ctx, "Socket accept failed, retrying", logtrace.Fields{
+				logtrace.Warn(ctx, "Socket accept failed, retrying", logtrace.Fields{
 					logtrace.FieldModule: "p2p",
 					logtrace.FieldError:  err.Error(),
 					"retry-in":           tempDelay.String(),
@@ -631,7 +635,7 @@ func (s *Network) Call(ctx context.Context, request *Message, isLong bool) (*Mes
 		return nil, errors.New("secure transport credentials are not set")
 	}
 
-	// build a safe pool key (use bech32 identity format for handshaker compatibility)
+	// pool key: bech32@ip:port (bech32 identity is your invariant)
 	idStr := string(request.Receiver.ID)
 	remoteAddr := fmt.Sprintf("%s@%s:%d", idStr, strings.TrimSpace(request.Receiver.IP), request.Receiver.Port)
 
@@ -646,11 +650,8 @@ func (s *Network) Call(ctx context.Context, request *Message, isLong bool) (*Mes
 		if dialErr != nil {
 			return nil, errors.Errorf("client secure establish %q: %w", remoteAddr, dialErr)
 		}
-
-		// double-check someone didn't add meanwhile
 		s.connPoolMtx.Lock()
 		if existing, getErr := s.connPool.Get(remoteAddr); getErr == nil {
-			// someone added already; use existing, close ours
 			_ = newConn.Close()
 			conn = existing
 		} else {
@@ -660,86 +661,239 @@ func (s *Network) Call(ctx context.Context, request *Message, isLong bool) (*Mes
 		s.connPoolMtx.Unlock()
 	}
 
-	// Encode once outside the lock
+	// Encode once
 	data, err := encode(request)
 	if err != nil {
 		return nil, errors.Errorf("encode: %w", err)
 	}
 
-	// If it's our wrapper, lock the whole RPC
+	// Wrapper: lock whole RPC to prevent cross-talk; retry once on stale pooled socket
 	if cw, ok := conn.(*connWrapper); ok {
-		var resp *Message
-		var rpcErr error
-		var mustDrop bool
-
-		cw.mtx.Lock()
-		{
-			if e := cw.secureConn.SetWriteDeadline(time.Now().Add(5 * time.Second)); e != nil {
-				rpcErr = errors.Errorf("set write deadline: %w", e)
-				mustDrop = true
-			} else if _, e := cw.secureConn.Write(data); e != nil {
-				rpcErr = errors.Errorf("conn write: %w", e)
-				mustDrop = true
-			} else if e := cw.secureConn.SetReadDeadline(time.Now().Add(timeout)); e != nil {
-				rpcErr = errors.Errorf("set read deadline: %w", e)
-				mustDrop = true
-			} else if r, e := decode(cw.secureConn); e != nil {
-				rpcErr = errors.Errorf("conn read: %w", e)
-				mustDrop = true
-			} else {
-				resp = r
-			}
-			_ = cw.secureConn.SetDeadline(time.Time{}) // clear for reuse
-		}
-		cw.mtx.Unlock()
-
-		if mustDrop {
-			// evict AFTER unlocking to avoid deadlock in Close()
-			s.connPoolMtx.Lock()
-			_ = conn.Close()
-			s.connPool.Del(remoteAddr)
-			s.connPoolMtx.Unlock()
-		}
-
-		if rpcErr != nil {
-			return nil, rpcErr
-		}
-		return resp, nil
+		return s.rpcOnceWrapper(ctx, cw, remoteAddr, data, timeout, request.MessageType)
 	}
 
-	// Fallback: not a connWrapper (rare)
-	if err := conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		// best effort evict
-		s.connPoolMtx.Lock()
-		_ = conn.Close()
-		s.connPool.Del(remoteAddr)
-		s.connPoolMtx.Unlock()
+	// Non-wrapper fallback: one stale retry
+	return s.rpcOnceNonWrapper(ctx, conn, remoteAddr, data, timeout, request.MessageType)
+}
+
+// ---- retryable RPC helpers -------------------------------------------------
+
+func (s *Network) rpcOnceWrapper(ctx context.Context, cw *connWrapper, remoteAddr string, data []byte, timeout time.Duration, msgType int) (*Message, error) {
+
+	sizeMB := float64(len(data)) / (1024.0 * 1024.0) // data is your gob-encoded message
+	throughputFloor := 8.0                           // MB/s (~64 Mbps)
+	est := time.Duration(sizeMB / throughputFloor * float64(time.Second))
+	base := 1 * time.Second
+	cushion := 5 * time.Second
+
+	writeDL := base + est + cushion
+	if writeDL < 5*time.Second {
+		writeDL = 5 * time.Second
+	}
+	if writeDL > timeout-1*time.Second {
+		writeDL = timeout - 1*time.Second
+	}
+
+	retried := false
+	for {
+		// lock the WHOLE RPC on a pooled wrapper
+		cw.mtx.Lock()
+
+		// write
+		if e := cw.secureConn.SetWriteDeadline(time.Now().Add(writeDL)); e != nil {
+			cw.mtx.Unlock()
+			s.dropFromPool(remoteAddr, cw)
+			return nil, errors.Errorf("set write deadline: %w", e)
+		}
+		if _, e := cw.secureConn.Write(data); e != nil {
+			cw.mtx.Unlock()
+			if isStaleConnError(e) && !retried {
+				logtrace.Info(ctx, "Stale pooled connection on write; redialing", logtrace.Fields{
+					logtrace.FieldModule: "p2p",
+					"remote":             remoteAddr,
+					"message_type":       msgType,
+				})
+				s.dropFromPool(remoteAddr, cw)
+				fresh, derr := NewSecureClientConn(ctx, s.clientTC, remoteAddr)
+				if derr != nil {
+					logtrace.Error(ctx, "Retry redial failed (write)", logtrace.Fields{
+						logtrace.FieldModule: "p2p",
+						"remote":             remoteAddr,
+						"message_type":       msgType,
+						logtrace.FieldError:  derr.Error(),
+					})
+					return nil, errors.Errorf("re-dial after write: %w", derr)
+				}
+				s.addToPool(remoteAddr, fresh)
+				if nw, ok := fresh.(*connWrapper); ok {
+					cw = nw
+					retried = true
+					continue // retry whole RPC under the new wrapper
+				}
+				// Non-wrapper fallback retry
+				return s.rpcOnceNonWrapper(ctx, fresh, remoteAddr, data, timeout, msgType)
+			}
+			s.dropFromPool(remoteAddr, cw)
+			return nil, errors.Errorf("conn write: %w", e)
+		}
+
+		// read
+		rdl := readDeadlineFor(msgType, timeout)
+		if e := cw.secureConn.SetReadDeadline(time.Now().Add(rdl)); e != nil {
+			cw.mtx.Unlock()
+			s.dropFromPool(remoteAddr, cw)
+			return nil, errors.Errorf("set read deadline: %w", e)
+		}
+		r, e := decode(cw.secureConn)
+		_ = cw.secureConn.SetDeadline(time.Time{})
+		cw.mtx.Unlock()
+		if e != nil {
+			if isStaleConnError(e) && !retried {
+				logtrace.Info(ctx, "Stale pooled connection on read; redialing", logtrace.Fields{
+					logtrace.FieldModule: "p2p",
+					"remote":             remoteAddr,
+					"message_type":       msgType,
+				})
+				s.dropFromPool(remoteAddr, cw)
+				fresh, derr := NewSecureClientConn(ctx, s.clientTC, remoteAddr)
+				if derr != nil {
+					logtrace.Error(ctx, "Retry redial failed (read)", logtrace.Fields{
+						logtrace.FieldModule: "p2p",
+						"remote":             remoteAddr,
+						"message_type":       msgType,
+						logtrace.FieldError:  derr.Error(),
+					})
+					return nil, errors.Errorf("re-dial after read: %w", derr)
+				}
+				s.addToPool(remoteAddr, fresh)
+				if nw, ok := fresh.(*connWrapper); ok {
+					cw = nw
+					retried = true
+					continue // retry whole RPC
+				}
+				return s.rpcOnceNonWrapper(ctx, fresh, remoteAddr, data, timeout, msgType)
+			}
+			s.dropFromPool(remoteAddr, cw)
+			return nil, errors.Errorf("conn read: %w", e)
+		}
+		return r, nil
+	}
+}
+
+func (s *Network) rpcOnceNonWrapper(ctx context.Context, conn net.Conn, remoteAddr string, data []byte, timeout time.Duration, msgType int) (*Message, error) {
+	sizeMB := float64(len(data)) / (1024.0 * 1024.0) // data is your gob-encoded message
+	throughputFloor := 8.0                           // MB/s (~64 Mbps)
+	est := time.Duration(sizeMB / throughputFloor * float64(time.Second))
+	base := 1 * time.Second
+	cushion := 5 * time.Second
+
+	writeDL := base + est + cushion
+	if writeDL < 5*time.Second {
+		writeDL = 5 * time.Second
+	}
+	if writeDL > timeout-1*time.Second {
+		writeDL = timeout - 1*time.Second
+	}
+	retried := false
+Retry:
+	if err := conn.SetWriteDeadline(time.Now().Add(writeDL)); err != nil {
+		s.dropFromPool(remoteAddr, conn)
 		return nil, errors.Errorf("set write deadline: %w", err)
 	}
 	if _, err := conn.Write(data); err != nil {
-		s.connPoolMtx.Lock()
-		_ = conn.Close()
-		s.connPool.Del(remoteAddr)
-		s.connPoolMtx.Unlock()
+		if isStaleConnError(err) && !retried {
+			logtrace.Info(ctx, "Stale pooled connection on write; redialing", logtrace.Fields{
+				logtrace.FieldModule: "p2p",
+				"remote":             remoteAddr,
+				"message_type":       msgType,
+			})
+			s.dropFromPool(remoteAddr, conn)
+			fresh, derr := NewSecureClientConn(ctx, s.clientTC, remoteAddr)
+			if derr != nil {
+				logtrace.Error(ctx, "Retry redial failed (write)", logtrace.Fields{
+					logtrace.FieldModule: "p2p",
+					"remote":             remoteAddr,
+					"message_type":       msgType,
+					logtrace.FieldError:  derr.Error(),
+				})
+				return nil, errors.Errorf("re-dial after write: %w", derr)
+			}
+			s.addToPool(remoteAddr, fresh)
+			conn = fresh
+			retried = true
+			goto Retry
+		}
+		s.dropFromPool(remoteAddr, conn)
 		return nil, errors.Errorf("conn write: %w", err)
 	}
-	if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
-		s.connPoolMtx.Lock()
-		_ = conn.Close()
-		s.connPool.Del(remoteAddr)
-		s.connPoolMtx.Unlock()
+
+	rdl := readDeadlineFor(msgType, timeout)
+	if err := conn.SetReadDeadline(time.Now().Add(rdl)); err != nil {
+		s.dropFromPool(remoteAddr, conn)
 		return nil, errors.Errorf("set read deadline: %w", err)
 	}
 	resp, err := decode(conn)
+	_ = conn.SetDeadline(time.Time{})
 	if err != nil {
-		s.connPoolMtx.Lock()
-		_ = conn.Close()
-		s.connPool.Del(remoteAddr)
-		s.connPoolMtx.Unlock()
+		if isStaleConnError(err) && !retried {
+			logtrace.Info(ctx, "Stale pooled connection on read; redialing", logtrace.Fields{
+				logtrace.FieldModule: "p2p",
+				"remote":             remoteAddr,
+				"message_type":       msgType,
+			})
+			s.dropFromPool(remoteAddr, conn)
+			fresh, derr := NewSecureClientConn(ctx, s.clientTC, remoteAddr)
+			if derr != nil {
+				logtrace.Error(ctx, "Retry redial failed (read)", logtrace.Fields{
+					logtrace.FieldModule: "p2p",
+					"remote":             remoteAddr,
+					"message_type":       msgType,
+					logtrace.FieldError:  derr.Error(),
+				})
+				return nil, errors.Errorf("re-dial after read: %w", derr)
+			}
+			s.addToPool(remoteAddr, fresh)
+			conn = fresh
+			retried = true
+			goto Retry
+		}
+		s.dropFromPool(remoteAddr, conn)
 		return nil, errors.Errorf("conn read: %w", err)
 	}
-	_ = conn.SetDeadline(time.Time{})
 	return resp, nil
+}
+
+// classify stale pooled sockets (not timeouts)
+func isStaleConnError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	s := err.Error()
+	switch {
+	case strings.Contains(s, "use of closed network connection"),
+		strings.Contains(s, "connection reset by peer"),
+		strings.Contains(s, "broken pipe"),
+		strings.Contains(s, "connection aborted"):
+		return true
+	default:
+		return false
+	}
+}
+
+// small helpers for pool ops
+func (s *Network) dropFromPool(key string, c net.Conn) {
+	s.connPoolMtx.Lock()
+	_ = c.Close()
+	s.connPool.Del(key)
+	s.connPoolMtx.Unlock()
+}
+func (s *Network) addToPool(key string, c net.Conn) {
+	s.connPoolMtx.Lock()
+	s.connPool.Add(key, c)
+	s.connPoolMtx.Unlock()
 }
 
 func (s *Network) handleBatchFindValues(ctx context.Context, message *Message, reqID string) (res []byte, err error) {
@@ -1143,9 +1297,13 @@ func (s *Network) generateResponseMessage(messageType int, receiver *Node, resul
 	switch messageType {
 	case StoreData, BatchStoreData:
 		response = &StoreDataResponse{Status: responseStatus}
-	case FindNode, BatchFindNode:
+	case FindNode:
+		response = &FindNodeResponse{Status: responseStatus}
+	case BatchFindNode:
 		response = &BatchFindNodeResponse{Status: responseStatus}
-	case FindValue, BatchFindValues:
+	case FindValue:
+		response = &FindValueResponse{Status: responseStatus}
+	case BatchFindValues:
 		response = &BatchFindValuesResponse{Status: responseStatus}
 	case Replicate:
 		response = &ReplicateDataResponse{Status: responseStatus}
@@ -1189,4 +1347,33 @@ func (s *Network) handlePanic(ctx context.Context, sender *Node, messageType int
 	}
 
 	return nil, nil
+}
+
+func readDeadlineFor(msgType int, overall time.Duration) time.Duration {
+	small := 10 * time.Second
+	switch msgType {
+	case Ping, FindNode, BatchFindNode, FindValue, StoreData, BatchStoreData:
+		if overall > small+1*time.Second {
+			return small
+		}
+		return overall - 1*time.Second
+	default:
+		return overall // Bulk responses keep full budget
+	}
+}
+
+func isLocalCancel(err error) bool {
+	if err == nil {
+		return false
+	}
+	// our own contexts
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	// net timeout also flows as DeadlineExceeded through some stacks – we want
+	// checkNodeActivity to decide; for hot path ops we do not count pure timeouts here
+	if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		return true
+	}
+	return false
 }

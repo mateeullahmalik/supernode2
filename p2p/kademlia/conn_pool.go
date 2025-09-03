@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/LumeraProtocol/supernode/v2/pkg/errors"
@@ -24,93 +25,20 @@ type ConnPool struct {
 	capacity int
 	conns    map[string]*connectionItem
 	mtx      sync.Mutex
+	metrics  *PoolMetrics
 }
 
 // NewConnPool return a connection pool
 func NewConnPool(ctx context.Context) *ConnPool {
+	m := &PoolMetrics{}
 	pool := &ConnPool{
 		capacity: defaultCapacity,
 		conns:    map[string]*connectionItem{},
+		metrics:  m,
 	}
+	m.Capacity.Store(int64(pool.capacity))
 
 	return pool
-}
-
-// Add a connection to pool
-func (pool *ConnPool) Add(addr string, conn net.Conn) {
-	pool.mtx.Lock()
-	defer pool.mtx.Unlock()
-
-	// if connection already in pool
-	if item, ok := pool.conns[addr]; ok {
-		// close the old connection
-		_ = item.conn.Close()
-		// replace in-place without triggering capacity eviction
-		pool.conns[addr] = &connectionItem{
-			lastAccess: time.Now().UTC(),
-			conn:       conn,
-		}
-		return
-	}
-
-	// if connection not in pool
-	if _, ok := pool.conns[addr]; !ok {
-		// if pool is full
-		if len(pool.conns) >= pool.capacity {
-			oldestAccess := time.Now().UTC()
-			oldestAccessAddr := ""
-
-			for addr, item := range pool.conns {
-				if item.lastAccess.Before(oldestAccess) {
-					oldestAccessAddr = addr
-					oldestAccess = item.lastAccess
-				}
-			}
-
-			if oldestAccessAddr != "" {
-				if item, ok := pool.conns[oldestAccessAddr]; ok {
-					_ = item.conn.Close()
-				}
-				delete(pool.conns, oldestAccessAddr)
-			}
-		}
-	}
-
-	pool.conns[addr] = &connectionItem{
-		lastAccess: time.Now().UTC(),
-		conn:       conn,
-	}
-}
-
-// Get return a connection from pool
-func (pool *ConnPool) Get(addr string) (net.Conn, error) {
-	pool.mtx.Lock()
-	defer pool.mtx.Unlock()
-	item, ok := pool.conns[addr]
-	if !ok {
-		return nil, fmt.Errorf("not found")
-	}
-
-	item.lastAccess = time.Now().UTC()
-	return item.conn, nil
-}
-
-// Del remove a connection from pool
-func (pool *ConnPool) Del(addr string) {
-	pool.mtx.Lock()
-	defer pool.mtx.Unlock()
-	delete(pool.conns, addr)
-}
-
-// Release all connections in pool - used when exits
-func (pool *ConnPool) Release() {
-	pool.mtx.Lock()
-	defer pool.mtx.Unlock()
-
-	for addr, item := range pool.conns {
-		item.conn.Close()
-		delete(pool.conns, addr)
-	}
 }
 
 // connWrapper implements wrapper of secure connection
@@ -150,6 +78,11 @@ func NewSecureClientConn(ctx context.Context, tc credentials.TransportCredential
 		return nil, errors.Errorf("dial %q: %w", remoteAddress, err)
 	}
 
+	// Disable Nagle for lower-latency small RPCs.
+	if tcp, ok := rawConn.(*net.TCPConn); ok {
+		_ = tcp.SetNoDelay(true)
+	}
+
 	// Clear any global deadline; per-RPC deadlines are set in Network.Call.
 	_ = rawConn.SetDeadline(time.Time{})
 
@@ -168,6 +101,15 @@ func NewSecureClientConn(ctx context.Context, tc credentials.TransportCredential
 
 // NewSecureServerConn do server handshake and create a secure connection
 func NewSecureServerConn(_ context.Context, tc credentials.TransportCredentials, rawConn net.Conn) (net.Conn, error) {
+	if tcp, ok := rawConn.(*net.TCPConn); ok {
+		_ = tcp.SetKeepAlive(true)
+		_ = tcp.SetKeepAlivePeriod(2 * time.Minute) // tune: 2–5 min
+	}
+
+	if tcp, ok := rawConn.(*net.TCPConn); ok {
+		_ = tcp.SetNoDelay(true)
+	}
+
 	conn, _, err := tc.ServerHandshake(rawConn)
 	if err != nil {
 		return nil, errors.Errorf("server secure establish failed: %w", err)
@@ -234,4 +176,170 @@ func (conn *connWrapper) SetWriteDeadline(t time.Time) error {
 	conn.mtx.Lock()
 	defer conn.mtx.Unlock()
 	return conn.secureConn.SetWriteDeadline(t)
+}
+
+// optional: expose a getter
+func (pool *ConnPool) MetricsSnapshot() map[string]int64 {
+	if pool.metrics == nil {
+		return map[string]int64{}
+	}
+	return pool.metrics.Snapshot()
+}
+
+// optional: allow changing capacity (updates gauge)
+func (pool *ConnPool) SetCapacity(n int) {
+	pool.mtx.Lock()
+	defer pool.mtx.Unlock()
+	pool.capacity = n
+	if pool.metrics != nil {
+		pool.metrics.Capacity.Store(int64(n))
+	}
+}
+
+func (pool *ConnPool) Add(addr string, conn net.Conn) {
+	pool.mtx.Lock()
+	defer pool.mtx.Unlock()
+
+	if item, ok := pool.conns[addr]; ok {
+		_ = item.conn.Close()
+		pool.conns[addr] = &connectionItem{lastAccess: time.Now().UTC(), conn: conn}
+		if pool.metrics != nil {
+			pool.metrics.Replacements.Add(1)
+			// OpenCurrent unchanged (we closed one, added one)
+		}
+		return
+	}
+
+	// capacity-based eviction
+	if len(pool.conns) >= pool.capacity {
+		oldestAccess := time.Now().UTC()
+		oldestKey := ""
+		for k, it := range pool.conns {
+			if it.lastAccess.Before(oldestAccess) {
+				oldestAccess = it.lastAccess
+				oldestKey = k
+			}
+		}
+		if oldestKey != "" {
+			if it, ok := pool.conns[oldestKey]; ok {
+				_ = it.conn.Close()
+			}
+			delete(pool.conns, oldestKey)
+			if pool.metrics != nil {
+				pool.metrics.EvictionsLRU.Add(1)
+			}
+			// OpenCurrent will be incremented when we add below (net +/- 0)
+		}
+	}
+
+	pool.conns[addr] = &connectionItem{lastAccess: time.Now().UTC(), conn: conn}
+	if pool.metrics != nil {
+		pool.metrics.Adds.Add(1)
+		pool.metrics.OpenCurrent.Store(int64(len(pool.conns)))
+	}
+}
+
+func (pool *ConnPool) Get(addr string) (net.Conn, error) {
+	pool.mtx.Lock()
+	defer pool.mtx.Unlock()
+	item, ok := pool.conns[addr]
+	if !ok {
+		if pool.metrics != nil {
+			pool.metrics.Misses.Add(1)
+		}
+		return nil, fmt.Errorf("not found")
+	}
+	item.lastAccess = time.Now().UTC()
+	if pool.metrics != nil {
+		pool.metrics.ReuseHits.Add(1)
+	}
+	return item.conn, nil
+}
+
+func (pool *ConnPool) Del(addr string) {
+	pool.mtx.Lock()
+	defer pool.mtx.Unlock()
+	if it, ok := pool.conns[addr]; ok {
+		_ = it.conn.Close()
+		delete(pool.conns, addr)
+		if pool.metrics != nil {
+			pool.metrics.OpenCurrent.Store(int64(len(pool.conns)))
+		}
+	}
+}
+
+func (pool *ConnPool) Release() {
+	pool.mtx.Lock()
+	defer pool.mtx.Unlock()
+	for addr, item := range pool.conns {
+		_ = item.conn.Close()
+		delete(pool.conns, addr)
+	}
+	if pool.metrics != nil {
+		pool.metrics.OpenCurrent.Store(0)
+	}
+}
+
+type PoolMetrics struct {
+	// counters
+	Adds         atomic.Int64 // new unique Add (not replacement)
+	Replacements atomic.Int64 // Add replacing an existing entry
+	ReuseHits    atomic.Int64 // Get hit
+	Misses       atomic.Int64 // Get miss
+	EvictionsLRU atomic.Int64 // capacity-based evictions
+	PrunedIdle   atomic.Int64 // idle evictions via PruneIdle
+
+	// gauge-ish
+	OpenCurrent atomic.Int64 // current open conns tracked by pool
+	Capacity    atomic.Int64 // configured capacity
+}
+
+func (m *PoolMetrics) Snapshot() map[string]int64 {
+	return map[string]int64{
+		"adds_total":          m.Adds.Load(),
+		"replacements_total":  m.Replacements.Load(),
+		"reuse_hits_total":    m.ReuseHits.Load(),
+		"misses_total":        m.Misses.Load(),
+		"evictions_lru_total": m.EvictionsLRU.Load(),
+		"pruned_idle_total":   m.PrunedIdle.Load(),
+		"open_current":        m.OpenCurrent.Load(),
+		"capacity":            m.Capacity.Load(),
+	}
+}
+
+// PruneIdle closes conns idle for >= idleFor and removes them from the pool.
+func (pool *ConnPool) PruneIdle(idleFor time.Duration) {
+	pool.mtx.Lock()
+	defer pool.mtx.Unlock()
+	now := time.Now().UTC()
+	pruned := int64(0)
+	for addr, it := range pool.conns {
+		if now.Sub(it.lastAccess) >= idleFor {
+			_ = it.conn.Close()
+			delete(pool.conns, addr)
+			pruned++
+		}
+	}
+	if pool.metrics != nil {
+		if pruned > 0 {
+			pool.metrics.PrunedIdle.Add(pruned)
+			pool.metrics.OpenCurrent.Store(int64(len(pool.conns)))
+		}
+	}
+}
+
+// StartPruner runs PruneIdle every interval; call from Network.NewNetwork or similar.
+func (pool *ConnPool) StartPruner(ctx context.Context, interval, idleFor time.Duration) {
+	go func() {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				pool.PruneIdle(idleFor)
+			}
+		}
+	}()
 }

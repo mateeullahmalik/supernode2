@@ -309,13 +309,15 @@ func (s *Store) UpdateReplicationInfo(_ context.Context, rep domain.NodeReplicat
 		return fmt.Errorf("invalid replication info: %v", rep)
 	}
 
-	_, err := s.db.Exec(`UPDATE replication_info SET ip = ?, is_active = ?, is_adjusted = ?, lastReplicatedAt = ?, updatedAt =?, port = ?, last_seen = ? WHERE id = ?`,
-		rep.IP, rep.Active, rep.IsAdjusted, rep.LastReplicatedAt, rep.UpdatedAt, rep.Port, string(rep.ID), rep.LastSeen)
+	_, err := s.db.Exec(`UPDATE replication_info
+       SET ip = ?, is_active = ?, is_adjusted = ?, lastReplicatedAt = ?, updatedAt = ?, port = ?, last_seen = ?
+       WHERE id = ?`,
+		rep.IP, rep.Active, rep.IsAdjusted, rep.LastReplicatedAt, rep.UpdatedAt, rep.Port, rep.LastSeen, string(rep.ID))
 	if err != nil {
 		return fmt.Errorf("failed to update replication info: %v", err)
 	}
 
-	return err
+	return nil
 }
 
 // AddReplicationInfo adds replication info
@@ -333,44 +335,21 @@ func (s *Store) AddReplicationInfo(_ context.Context, rep domain.NodeReplication
 	return err
 }
 
-// UpdateLastSeen updates last seen
-func (s *Store) UpdateLastSeen(_ context.Context, id string) error {
-	_, err := s.db.Exec(`UPDATE replication_info SET last_seen = ? WHERE id = ?`, time.Now().UTC(), id)
-	if err != nil {
-		return fmt.Errorf("failed to update last_seen of node: %s: - err: %v", id, err)
+const sqliteMaxVars = 900 // keep well below 999
+
+func chunkStrings(in []string, n int) [][]string {
+	if n <= 0 {
+		n = sqliteMaxVars
 	}
-
-	return err
-}
-
-// UpdateLastReplicated updates replication info last replicated
-func (s *Store) UpdateLastReplicated(_ context.Context, id string, t time.Time) error {
-	_, err := s.db.Exec(`UPDATE replication_info SET lastReplicatedAt = ?, updatedAt = ? WHERE id = ?`, t, time.Now().UTC(), id)
-	if err != nil {
-		return fmt.Errorf("failed to update last replicated: %v", err)
+	out := make([][]string, 0, (len(in)+n-1)/n)
+	for i := 0; i < len(in); i += n {
+		j := i + n
+		if j > len(in) {
+			j = len(in)
+		}
+		out = append(out, in[i:j])
 	}
-
-	return err
-}
-
-// UpdateIsAdjusted updates adjusted
-func (s *Store) UpdateIsAdjusted(_ context.Context, id string, isAdjusted bool) error {
-	_, err := s.db.Exec(`UPDATE replication_info SET is_adjusted = ?, updatedAt = ? WHERE id = ?`, isAdjusted, time.Now().UTC(), id)
-	if err != nil {
-		return fmt.Errorf("failed to update is_adjusted of node: %s: - err: %v", id, err)
-	}
-
-	return err
-}
-
-// UpdateIsActive updates active
-func (s *Store) UpdateIsActive(_ context.Context, id string, isActive bool, isAdjusted bool) error {
-	_, err := s.db.Exec(`UPDATE replication_info SET is_active = ?, is_adjusted = ?, updatedAt = ? WHERE id = ?`, isActive, isAdjusted, time.Now().UTC(), id)
-	if err != nil {
-		return fmt.Errorf("failed to update is_active of node: %s: - err: %v", id, err)
-	}
-
-	return err
+	return out
 }
 
 // RetrieveBatchNotExist returns a list of keys (hex-decoded) that do not exist in the table
@@ -382,15 +361,7 @@ func (s *Store) RetrieveBatchNotExist(ctx context.Context, keys []string, batchS
 		keyMap[keys[i]] = true
 	}
 
-	batchCount := (len(keys) + batchSize - 1) / batchSize // Round up division
-
-	for i := 0; i < batchCount; i++ {
-		start := i * batchSize
-		end := start + batchSize
-		if end > len(keys) {
-			end = len(keys)
-		}
-		batchKeys := keys[start:end]
+	for _, batchKeys := range chunkStrings(keys, sqliteMaxVars) {
 
 		placeholders := make([]string, len(batchKeys))
 		args := make([]interface{}, len(batchKeys))
@@ -440,59 +411,94 @@ func (s Store) RetrieveBatchValues(ctx context.Context, keys []string, getFromCl
 	return retrieveBatchValues(ctx, s.db, keys, getFromCloud, s)
 }
 
-// RetrieveBatchValues returns a list of values  for the given keys (hex-encoded)
+// RetrieveBatchValues returns a list of values for the given keys (hex-encoded).
 func retrieveBatchValues(ctx context.Context, db *sqlx.DB, keys []string, getFromCloud bool, s Store) ([][]byte, int, error) {
-	placeholders := make([]string, len(keys))
-	args := make([]interface{}, len(keys))
-	keyToIndex := make(map[string]int)
-
-	for i := 0; i < len(keys); i++ {
-		placeholders[i] = "?"
-		args[i] = keys[i]
-		keyToIndex[keys[i]] = i
+	// Early return
+	if len(keys) == 0 {
+		return nil, 0, nil
 	}
 
-	query := fmt.Sprintf(`SELECT key, data, is_on_cloud FROM data WHERE key IN (%s)`, strings.Join(placeholders, ","))
-	rows, err := db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to retrieve records: %w", err)
+	// Helper: chunk keys into slices of at most sqliteMaxVars
+	chunkStrings := func(in []string, n int) [][]string {
+		if n <= 0 {
+			n = sqliteMaxVars
+		}
+		out := make([][]string, 0, (len(in)+n-1)/n)
+		for i := 0; i < len(in); i += n {
+			j := i + n
+			if j > len(in) {
+				j = len(in)
+			}
+			out = append(out, in[i:j])
+		}
+		return out
 	}
-	defer rows.Close()
+
+	// Map key -> index in the output slice (first occurrence wins)
+	keyToIndex := make(map[string]int, len(keys))
+	for i := range keys {
+		if _, exists := keyToIndex[keys[i]]; !exists {
+			keyToIndex[keys[i]] = i
+		}
+	}
 
 	values := make([][]byte, len(keys))
-	var cloudKeys []string
 	keysFound := 0
+	var cloudKeys []string
 
-	for rows.Next() {
-		var key string
-		var value []byte
-		var is_on_cloud bool
-		if err := rows.Scan(&key, &value, &is_on_cloud); err != nil {
-			return nil, keysFound, fmt.Errorf("failed to scan key and value: %w", err)
+	// Query in chunks
+	for _, chunk := range chunkStrings(keys, sqliteMaxVars) {
+		placeholders := make([]string, len(chunk))
+		args := make([]interface{}, len(chunk))
+		for i := range chunk {
+			placeholders[i] = "?"
+			args[i] = chunk[i]
 		}
 
-		if idx, found := keyToIndex[key]; found {
-			values[idx] = value
-			keysFound++
+		query := fmt.Sprintf(`SELECT key, data, is_on_cloud FROM data WHERE key IN (%s)`, strings.Join(placeholders, ","))
+		rows, err := db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, keysFound, fmt.Errorf("failed to retrieve records: %w", err)
+		}
 
-			if s.IsCloudBackupOn() && !s.migrationStore.isSyncInProgress {
-				if len(value) == 0 && is_on_cloud {
-					cloudKeys = append(cloudKeys, key)
+		for rows.Next() {
+			var key string
+			var value []byte
+			var is_on_cloud bool
+
+			if err := rows.Scan(&key, &value, &is_on_cloud); err != nil {
+				_ = rows.Close()
+				return nil, keysFound, fmt.Errorf("failed to scan key and value: %w", err)
+			}
+
+			if idx, found := keyToIndex[key]; found {
+				// Count only first-time fills (defensive against duplicates)
+				if len(values[idx]) == 0 {
+					keysFound++
 				}
-				PostAccessUpdate([]string{key})
+				values[idx] = value
+
+				// Cloud-handling + access update (preserve original behavior)
+				if s.IsCloudBackupOn() && !s.migrationStore.isSyncInProgress {
+					if len(value) == 0 && is_on_cloud {
+						cloudKeys = append(cloudKeys, key)
+					}
+					PostAccessUpdate([]string{key})
+				}
 			}
 		}
+
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, keysFound, fmt.Errorf("rows processing error: %w", err)
+		}
+		_ = rows.Close()
 	}
 
-	if err := rows.Err(); err != nil {
-		return nil, keysFound, fmt.Errorf("rows processing error: %w", err)
-	}
-
+	// Fetch missing-but-on-cloud keys if requested
 	if len(cloudKeys) > 0 && getFromCloud {
-		// Fetch from cloud
 		cloudValues, err := s.cloud.FetchBatch(cloudKeys)
 		if err != nil {
-			// log.WithContext(ctx).WithError(err).Error("failed to fetch from cloud")
 			logtrace.Error(ctx, "failed to fetch from cloud", logtrace.Fields{
 				logtrace.FieldModule: "p2p",
 				logtrace.FieldError:  err.Error(),
@@ -501,20 +507,24 @@ func retrieveBatchValues(ctx context.Context, db *sqlx.DB, keys []string, getFro
 
 		for key, value := range cloudValues {
 			if idx, found := keyToIndex[key]; found {
+				// Only count if we actually fill something that was empty
+				if len(values[idx]) == 0 && len(value) > 0 {
+					keysFound++
+				}
 				values[idx] = value
-				keysFound++
 			}
 		}
 
+		// Best-effort background store for fetched-from-cloud values
 		go func() {
+			if len(cloudValues) == 0 {
+				return
+			}
 			datList := make([][]byte, 0, len(cloudValues))
 			for _, v := range cloudValues {
 				datList = append(datList, v)
 			}
-
-			// Store the fetched data in the local store
-			if err := s.StoreBatch(ctx, datList, 0, false); err != nil {
-				// log.WithError(err).Error("failed to store fetched data in local store")
+			if err := s.StoreBatch(context.Background(), datList, 0, false); err != nil {
 				logtrace.Error(ctx, "failed to store fetched data in local store", logtrace.Fields{
 					logtrace.FieldModule: "p2p",
 					logtrace.FieldError:  err.Error(),
@@ -528,23 +538,24 @@ func retrieveBatchValues(ctx context.Context, db *sqlx.DB, keys []string, getFro
 
 // BatchDeleteRepKeys will delete a list of keys from the replication_keys table
 func (s *Store) BatchDeleteRepKeys(keys []string) error {
-	var placeholders []string
-	var arguments []interface{}
-	for _, key := range keys {
-		placeholders = append(placeholders, "?")
-		arguments = append(arguments, key)
+
+	totalAffected := int64(0)
+	for _, chunk := range chunkStrings(keys, sqliteMaxVars) {
+		ph := make([]string, len(chunk))
+		args := make([]interface{}, len(chunk))
+		for i := range chunk {
+			ph[i] = "?"
+			args[i] = chunk[i]
+		}
+		q := fmt.Sprintf("DELETE FROM replication_keys WHERE key IN (%s)", strings.Join(ph, ","))
+		res, err := s.db.Exec(q, args...)
+		if err != nil {
+			return fmt.Errorf("batch delete: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		totalAffected += n
 	}
-
-	query := fmt.Sprintf("DELETE FROM replication_keys WHERE key IN (%s)", strings.Join(placeholders, ","))
-
-	res, err := s.db.Exec(query, arguments...)
-	if err != nil {
-		return fmt.Errorf("cannot batch delete records from replication_keys table: %w", err)
-	}
-
-	if rowsAffected, err := res.RowsAffected(); err != nil {
-		return fmt.Errorf("cannot get affected rows after batch deleting records from replication_keys table: %w", err)
-	} else if rowsAffected == 0 {
+	if totalAffected == 0 {
 		return fmt.Errorf("no record deleted (batch) from replication_keys table")
 	}
 
@@ -581,4 +592,151 @@ func (s *Store) IncrementAttempts(keys []string) error {
 
 	// commit the transaction
 	return tx.Commit()
+}
+
+type repJobKind int
+
+const (
+	repJobLastSeen repJobKind = iota
+	repJobIsActive
+	repJobIsAdjusted
+	repJobLastReplicated
+)
+
+type repJob struct {
+	kind       repJobKind
+	id         string
+	isActive   bool
+	isAdjusted bool
+	t          time.Time
+	ctx        context.Context
+	done       chan error
+}
+
+type RepWriter struct {
+	ch   chan repJob
+	quit chan struct{}
+}
+
+func NewRepWriter(buf int) *RepWriter {
+	return &RepWriter{
+		ch:   make(chan repJob, buf),
+		quit: make(chan struct{}),
+	}
+}
+
+func (w *RepWriter) Stop() { close(w.quit) }
+
+// startRepWriter runs a single serialized loop for replication_info updates.
+func (s *Store) startRepWriter(ctx context.Context) {
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-s.repWriter.quit:
+				return
+			case j := <-s.repWriter.ch:
+				var err error
+				// pick a context for DB ops (prefer job ctx if non-nil)
+				dbctx := j.ctx
+				if dbctx == nil {
+					dbctx = context.Background()
+				}
+				switch j.kind {
+				case repJobLastSeen:
+					_, err = s.db.ExecContext(dbctx,
+						`UPDATE replication_info SET last_seen = ? WHERE id = ?`,
+						time.Now().UTC(), j.id)
+
+				case repJobIsActive:
+					_, err = s.db.ExecContext(dbctx,
+						`UPDATE replication_info SET is_active = ?, is_adjusted = ?, updatedAt = ? WHERE id = ?`,
+						j.isActive, j.isAdjusted, time.Now().UTC(), j.id)
+
+				case repJobIsAdjusted:
+					_, err = s.db.ExecContext(dbctx,
+						`UPDATE replication_info SET is_adjusted = ?, updatedAt = ? WHERE id = ?`,
+						j.isAdjusted, time.Now().UTC(), j.id)
+
+				case repJobLastReplicated:
+					_, err = s.db.ExecContext(dbctx,
+						`UPDATE replication_info SET lastReplicatedAt = ?, updatedAt = ? WHERE id = ?`,
+						j.t, time.Now().UTC(), j.id)
+				}
+				// deliver result
+				if j.done != nil {
+					j.done <- err
+				}
+			}
+		}
+	}()
+}
+
+// UpdateLastSeen updates last_seen for a node (serialized via writer)
+func (s *Store) UpdateLastSeen(ctx context.Context, id string) error {
+	job := repJob{
+		kind: repJobLastSeen,
+		id:   id,
+		ctx:  ctx,
+		done: make(chan error, 1),
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case s.repWriter.ch <- job:
+	}
+	return <-job.done
+}
+
+// UpdateIsActive sets is_active / is_adjusted and bumps updatedAt (serialized)
+func (s *Store) UpdateIsActive(ctx context.Context, id string, isActive bool, isAdjusted bool) error {
+	job := repJob{
+		kind:       repJobIsActive,
+		id:         id,
+		isActive:   isActive,
+		isAdjusted: isAdjusted,
+		ctx:        ctx,
+		done:       make(chan error, 1),
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case s.repWriter.ch <- job:
+	}
+	return <-job.done
+}
+
+// UpdateIsAdjusted flips is_adjusted and bumps updatedAt (serialized)
+func (s *Store) UpdateIsAdjusted(ctx context.Context, id string, isAdjusted bool) error {
+	job := repJob{
+		kind:       repJobIsAdjusted,
+		id:         id,
+		isAdjusted: isAdjusted,
+		ctx:        ctx,
+		done:       make(chan error, 1),
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case s.repWriter.ch <- job:
+	}
+	return <-job.done
+}
+
+// UpdateLastReplicated sets lastReplicatedAt and bumps updatedAt (serialized)
+func (s *Store) UpdateLastReplicated(ctx context.Context, id string, t time.Time) error {
+	job := repJob{
+		kind: repJobLastReplicated,
+		id:   id,
+		t:    t,
+		ctx:  ctx,
+		done: make(chan error, 1),
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case s.repWriter.ch <- job:
+	}
+	return <-job.done
 }
