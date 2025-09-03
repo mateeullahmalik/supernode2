@@ -28,10 +28,10 @@ func Setup(serviceName string) {
 	// Ensure the log level is always colorized.
 	config.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
 
-	tracingEnabled := getTracingEnabled()
+	tracingEnabled := true
 	config.EncoderConfig.TimeKey = "" // Remove the timestamp
 	config.DisableCaller = true
-	config.DisableStacktrace = true
+	// config.DisableStacktrace = true
 
 	// Always respect the LOG_LEVEL environment variable.
 	config.Level = zap.NewAtomicLevelAt(getLogLevel())
@@ -49,7 +49,7 @@ func Setup(serviceName string) {
 
 // getLogLevel returns the log level from environment variable LOG_LEVEL
 func getLogLevel() zapcore.Level {
-	levelStr := strings.ToLower(os.Getenv("LOG_LEVEL"))
+	levelStr := "debug"
 	switch levelStr {
 	case "debug":
 		return zapcore.DebugLevel
