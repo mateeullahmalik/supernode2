@@ -760,7 +760,7 @@ func NewEventListener(t *testing.T, rpcAddr string) *EventListener {
 	return &EventListener{client: httpClient, t: t}
 }
 
-var DefaultWaitTime = 60 * time.Second
+var DefaultWaitTime = 30 * time.Second
 
 type (
 	CleanupFn     func()
