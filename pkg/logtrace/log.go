@@ -29,7 +29,7 @@ func Setup(serviceName string) {
 	config.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
 
 	tracingEnabled := true
-	config.EncoderConfig.TimeKey = "" // Remove the timestamp
+	// config.EncoderConfig.TimeKey = "" // Remove the timestamp
 	config.DisableCaller = true
 	// config.DisableStacktrace = true
 
