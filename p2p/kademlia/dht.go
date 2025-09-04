@@ -41,8 +41,8 @@ const (
 	delKeysCountThreshold                       = 10
 	lowSpaceThreshold                           = 50 // GB
 	batchStoreSize                              = 2500
-	storeSameSymbolsBatchConcurrency            = 1
-	storeSymbolsBatchConcurrency                = 2.0
+	storeSameSymbolsBatchConcurrency            = 3
+	storeSymbolsBatchConcurrency                = 3.0
 	minimumDataStoreSuccessRate                 = 75.0
 
 	maxIterations = 4
@@ -635,47 +635,40 @@ func (s *DHT) fetchAndAddLocalKeys(ctx context.Context, hexKeys []string, result
 	return count, err
 }
 
-// BatchRetrieve data from the networking using keys. Keys are the base58 encoded
 func (s *DHT) BatchRetrieve(ctx context.Context, keys []string, required int32, txID string, localOnly ...bool) (result map[string][]byte, err error) {
-	result = make(map[string][]byte) // the result of the batch retrieve - keys are b58 encoded (as received in request)
-	var resMap sync.Map              // the result of the batch retrieve - keys are b58 encoded
-	var foundLocalCount int32        // the number of values found so far
+	result = make(map[string][]byte)
+	var resMap sync.Map
+	var foundLocalCount int32
 
-	hexKeys := make([]string, len(keys))                // the hex keys keys[i] = hex.EncodeToString(base58.Decode(keys[i]))
-	globalClosestContacts := make(map[string]*NodeList) // This will store the global top 6 nodes for each symbol's hash
-	hashes := make([][]byte, len(keys))                 // the hashes of the keys - hashes[i] = base58.Decode(keys[i])
-	knownNodes := make(map[string]*Node)                // This will store the nodes we know about
+	hexKeys := make([]string, len(keys))
+	globalClosestContacts := make(map[string]*NodeList)
+	hashes := make([][]byte, len(keys))
+	knownNodes := make(map[string]*Node)
+	var knownMu sync.Mutex
+	var closestMu sync.RWMutex
 
 	defer func() {
-		// Transfer data from resMap to result
 		resMap.Range(func(key, value interface{}) bool {
 			hexKey := key.(string)
 			valBytes := value.([]byte)
-
 			k, err := hex.DecodeString(hexKey)
 			if err != nil {
 				logtrace.Error(ctx, "Failed to decode hex key in resMap.Range", logtrace.Fields{
 					logtrace.FieldModule: "dht",
-					"key":                hexKey,
-					"txid":               txID,
-					logtrace.FieldError:  err.Error(),
+					"key":                hexKey, "txid": txID, logtrace.FieldError: err.Error(),
 				})
 				return true
 			}
-
 			result[base58.Encode(k)] = valBytes
-
 			return true
 		})
-
-		for key, value := range result {
-			if len(value) == 0 {
-				delete(result, key)
+		for k, v := range result {
+			if len(v) == 0 {
+				delete(result, k)
 			}
 		}
 	}()
 
-	// populate result map with required keys
 	for _, key := range keys {
 		result[key] = nil
 	}
@@ -685,7 +678,6 @@ func (s *DHT) BatchRetrieve(ctx context.Context, keys []string, required int32, 
 	self := &Node{ID: s.ht.self.ID, IP: hostIP, Port: s.ht.self.Port}
 	self.SetHashedID()
 
-	// populate hexKeys and hashes
 	for i, key := range keys {
 		decoded := base58.Decode(key)
 		if len(decoded) != B/8 {
@@ -694,52 +686,31 @@ func (s *DHT) BatchRetrieve(ctx context.Context, keys []string, required int32, 
 		hashes[i] = decoded
 		hexKeys[i] = hex.EncodeToString(decoded)
 	}
-	logtrace.Info(ctx, "Populated keys and hashes", logtrace.Fields{
-		logtrace.FieldModule: "dht",
-		"self":               self.String(),
-		"txid":               txID,
-	})
 
-	// Add nodes from route table to known nodes map
-	for _, node := range s.ht.nodes() {
-		n := &Node{ID: node.ID, IP: node.IP, Port: node.Port}
-		n.SetHashedID()
-		knownNodes[string(node.ID)] = n
-
+	for _, n := range s.ht.nodes() {
+		nn := &Node{ID: n.ID, IP: n.IP, Port: n.Port}
+		nn.SetHashedID()
+		knownNodes[string(nn.ID)] = nn
 	}
 
-	// Calculate the local top 6 nodes for each value
 	for i := range keys {
-		// Calculate the local top 6 nodes for each value
-		top6 := s.ht.closestContactsWithInlcudingNode(Alpha, hashes[i], s.ignorelist.ToNodeList(), nil)
+		top6 := s.ht.closestContactsWithIncludingNode(Alpha, hashes[i], s.ignorelist.ToNodeList(), nil)
+		closestMu.Lock()
 		globalClosestContacts[keys[i]] = top6
-
-		s.addKnownNodes(ctx, top6.Nodes, knownNodes)
+		closestMu.Unlock()
+		s.addKnownNodesSafe(ctx, top6.Nodes, knownNodes, &knownMu)
 	}
 
-	logtrace.Info(ctx, "Closest contacts populated, fetching local keys now", logtrace.Fields{
-		logtrace.FieldModule: "dht",
-		"txid":               txID,
-	})
-
-	// remove self from the map
 	delete(knownNodes, string(self.ID))
 
 	foundLocalCount, err = s.fetchAndAddLocalKeys(ctx, hexKeys, &resMap, required)
 	if err != nil {
 		return nil, fmt.Errorf("fetch and add local keys: %v", err)
 	}
-	logtrace.Info(ctx, "Batch find values count", logtrace.Fields{
-		logtrace.FieldModule: "dht",
-		"txid":               txID,
-		"local_found_count":  foundLocalCount,
-	})
-
 	if foundLocalCount >= required {
 		return result, nil
 	}
 
-	// We don't have enough values locally, so we need to fetch from the network
 	batchSize := batchStoreSize
 	var networkFound int32
 	totalBatches := int(math.Ceil(float64(required) / float64(batchSize)))
@@ -750,127 +721,126 @@ func (s *DHT) BatchRetrieve(ctx context.Context, keys []string, required int32, 
 	gctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	logtrace.Info(ctx, "Begin iterate batch get values", logtrace.Fields{
-		logtrace.FieldModule: "dht",
-		"txid":               txID,
-		"parallel_batches":   parallelBatches,
-	})
-	// Process in batches
 	for start := 0; start < len(keys); start += batchSize {
 		end := start + batchSize
 		if end > len(keys) {
 			end = len(keys)
 		}
-
-		// Check for early termination
 		if atomic.LoadInt32(&networkFound)+int32(foundLocalCount) >= int32(required) {
 			break
 		}
 
 		wg.Add(1)
-		semaphore <- struct{}{} // Acquire a semaphore slot before launching the goroutine
-
-		go s.processBatch(gctx, keys[start:end], hexKeys[start:end], semaphore, &wg, globalClosestContacts, knownNodes, &resMap,
-			required, foundLocalCount, &networkFound, cancel, txID)
+		semaphore <- struct{}{}
+		go s.processBatch(
+			gctx,
+			keys[start:end],
+			hexKeys[start:end],
+			semaphore, &wg,
+			globalClosestContacts,
+			&closestMu,
+			knownNodes, &knownMu,
+			&resMap,
+			required,
+			foundLocalCount,
+			&networkFound,
+			cancel,
+			txID,
+		)
 	}
 
-	wg.Wait() // Wait for all goroutines to finish
-	logtrace.Info(ctx, "Iterate batch get values workers done", logtrace.Fields{
-		logtrace.FieldModule: "dht",
-		"txid":               txID,
-	})
-
+	wg.Wait()
 	return result, nil
 }
 
-func (s *DHT) processBatch(ctx context.Context, batchKeys []string, batchHexKeys []string, semaphore chan struct{}, wg *sync.WaitGroup,
-	globalClosestContacts map[string]*NodeList, knownNodes map[string]*Node, resMap *sync.Map, required int32, foundLocalCount int32, networkFound *int32,
-	cancel context.CancelFunc, txID string) {
-
+func (s *DHT) processBatch(
+	ctx context.Context,
+	batchKeys []string,
+	batchHexKeys []string,
+	semaphore chan struct{},
+	wg *sync.WaitGroup,
+	globalClosestContacts map[string]*NodeList,
+	closestMu *sync.RWMutex,
+	knownNodes map[string]*Node,
+	knownMu *sync.Mutex,
+	resMap *sync.Map,
+	required int32,
+	foundLocalCount int32,
+	networkFound *int32,
+	cancel context.CancelFunc,
+	txID string,
+) {
 	defer wg.Done()
 	defer func() { <-semaphore }()
 
 	for i := 0; i < maxIterations; i++ {
-		// Early check if context is done to stop processing
 		select {
 		case <-ctx.Done():
 			return
 		default:
 		}
 
+		// Build fetch map (read globalClosestContacts under RLock)
 		fetchMap := make(map[string][]int)
 		for i, key := range batchKeys {
-			fetchNodes := globalClosestContacts[key].Nodes
-			for _, node := range fetchNodes {
+			closestMu.RLock()
+			nl := globalClosestContacts[key]
+			closestMu.RUnlock()
+			if nl == nil {
+				continue
+			}
+			for _, node := range nl.Nodes {
 				nodeID := string(node.ID)
 				fetchMap[nodeID] = append(fetchMap[nodeID], i)
 			}
 		}
 
-		// Iterate through the network to get the values for the current batch
-		foundCount, newClosestContacts, batchErr := s.iterateBatchGetValues(ctx, knownNodes, batchKeys, batchHexKeys, fetchMap, resMap, required, foundLocalCount+atomic.LoadInt32(networkFound))
+		foundCount, newClosestContacts, batchErr := s.iterateBatchGetValues(
+			ctx, knownNodes, batchKeys, batchHexKeys, fetchMap, resMap, required, foundLocalCount+atomic.LoadInt32(networkFound),
+		)
 		if batchErr != nil {
 			logtrace.Error(ctx, "Iterate batch get values failed", logtrace.Fields{
-				logtrace.FieldModule: "dht",
-				"txid":               txID,
-				logtrace.FieldError:  batchErr.Error(),
+				logtrace.FieldModule: "dht", "txid": txID, logtrace.FieldError: batchErr.Error(),
 			})
 		}
 
-		// Update the global counter for found values
 		atomic.AddInt32(networkFound, int32(foundCount))
-
-		// Check and propagate early termination
 		if atomic.LoadInt32(networkFound)+int32(foundLocalCount) >= int32(required) {
-			cancel() // Cancels the context, signaling other goroutines to stop
+			cancel()
 			break
 		}
 
-		// we now need to check if the nodes in the globalClosestContacts Map are still in the top 6
-		// if not, we need to send calls to the newly found nodes to inquire about the top 6 nodes
 		changed := false
 		for key, nodesList := range newClosestContacts {
 			if nodesList == nil || nodesList.Nodes == nil {
 				continue
 			}
 
-			if globalClosestContacts[key] == nil || globalClosestContacts[key].Nodes == nil {
-				logtrace.Warn(ctx, "Global contacts list doesn't have the key", logtrace.Fields{
-					logtrace.FieldModule: "dht",
-					"key":                key,
-				})
+			closestMu.RLock()
+			curr := globalClosestContacts[key]
+			closestMu.RUnlock()
+			if curr == nil || curr.Nodes == nil {
+				logtrace.Warn(ctx, "Global contacts missing key during merge", logtrace.Fields{"key": key})
 				continue
 			}
 
-			if !haveAllNodes(nodesList.Nodes, globalClosestContacts[key].Nodes) {
-				logtrace.Info(ctx, "Global closest contacts list changed in fetch", logtrace.Fields{
-					logtrace.FieldModule: "dht",
-					"key":                key,
-					"have":               nodesList.String(),
-					"task_id":            txID,
-					"got":                globalClosestContacts[key].String(),
-				})
+			if !haveAllNodes(nodesList.Nodes, curr.Nodes) {
 				changed = true
 			}
 
-			nodesList.AddNodes(globalClosestContacts[key].Nodes)
+			nodesList.AddNodes(curr.Nodes)
 			nodesList.Sort()
 			nodesList.TopN(Alpha)
 
-			s.addKnownNodes(ctx, nodesList.Nodes, knownNodes)
+			s.addKnownNodesSafe(ctx, nodesList.Nodes, knownNodes, knownMu)
+
+			closestMu.Lock()
 			globalClosestContacts[key] = nodesList
+			closestMu.Unlock()
 		}
 
 		if !changed {
 			break
-		}
-
-		if i == maxIterations-1 {
-			logtrace.Warn(ctx, "Max iterations reached, still top 6 list was changed", logtrace.Fields{
-				logtrace.FieldModule: "dht",
-				"iter":               i,
-				"task_id":            txID,
-			})
 		}
 	}
 }
@@ -1345,36 +1315,20 @@ func (s *DHT) sendStoreData(ctx context.Context, n *Node, request *StoreDataRequ
 func (s *DHT) addNode(ctx context.Context, node *Node) *Node {
 	// Allow localhost for integration testing
 	isIntegrationTest := os.Getenv("INTEGRATION_TEST") == "true"
-
 	if node.IP == "" || node.IP == "0.0.0.0" || (!isIntegrationTest && node.IP == "127.0.0.1") {
-		logtrace.Debug(ctx, "Trying to add invalid node", logtrace.Fields{
-			logtrace.FieldModule: "p2p",
-		})
+		logtrace.Debug(ctx, "Trying to add invalid node", logtrace.Fields{logtrace.FieldModule: "p2p"})
 		return nil
 	}
-
-	// ensure this is not itself address
 	if bytes.Equal(node.ID, s.ht.self.ID) {
-		logtrace.Debug(ctx, "Trying to add itself", logtrace.Fields{
-			logtrace.FieldModule: "p2p",
-		})
+		logtrace.Debug(ctx, "Trying to add itself", logtrace.Fields{logtrace.FieldModule: "p2p"})
 		return nil
 	}
 	node.SetHashedID()
 
-	index := s.ht.bucketIndex(s.ht.self.HashedID, node.HashedID)
+	idx := s.ht.bucketIndex(s.ht.self.HashedID, node.HashedID)
 
-	if err := s.updateReplicationNode(ctx, node.ID, node.IP, node.Port, true); err != nil {
-		logtrace.Error(ctx, "Update replication node failed", logtrace.Fields{
-			logtrace.FieldModule: "p2p",
-			"node_id":            string(node.ID),
-			"node_ip":            node.IP,
-			logtrace.FieldError:  err.Error(),
-		})
-	}
-
-	if s.ht.hasBucketNode(index, node.ID) {
-		// refresh using hashed ID to match hashtable expectations
+	// already in table? refresh to MRU
+	if s.ht.hasBucketNode(idx, node.HashedID) {
 		s.ht.refreshNode(node.HashedID)
 		return nil
 	}
@@ -1382,46 +1336,24 @@ func (s *DHT) addNode(ctx context.Context, node *Node) *Node {
 	s.ht.mutex.Lock()
 	defer s.ht.mutex.Unlock()
 
-	// 2. if the bucket is full, ping the first node
-	bucket := s.ht.routeTable[index]
-	if len(bucket) == K {
-		first := bucket[0]
-		// new a ping request message
-		request := s.newMessage(Ping, first, nil)
-		// new a context with timeout
-		ctx, cancel := context.WithTimeout(ctx, defaultPingTime)
-		defer cancel()
-
-		// invoke the request and handle the response
-		_, err := s.network.Call(ctx, request, false)
-		if err == nil {
-			// refresh the node to the end of bucket
-			bucket = bucket[1:]
-			bucket = append(bucket, node)
-			s.ht.routeTable[index] = bucket
-			return nil
-		} else {
-
-			// Penalize the unresponsive resident, not the new candidate
-			s.ignorelist.IncrementCount(first)
-			// the node is down, remove the node from bucket
-			bucket = append(bucket, node)
-			bucket = bucket[1:]
-
-			// need to reset the route table with the bucket
-			s.ht.routeTable[index] = bucket
-
-			return first
-		}
-
-	} else {
-		// 3. append the node to the end of the bucket
-		bucket = append(bucket, node)
+	b := s.ht.routeTable[idx]
+	if len(b) < K {
+		s.ht.routeTable[idx] = append(b, node)
+		return nil
 	}
 
-	// need to update the route table with the bucket
-	s.ht.routeTable[index] = bucket
+	// Bucket full:
+	lru := b[0]
+	// If we already know the LRU is bad, replace immediately.
+	if s.ignorelist.Banned(lru) {
+		s.ignorelist.IncrementCount(lru) // optional: nudge the counter
+		b[0] = node
+		s.ht.routeTable[idx] = b
+		return lru
+	}
 
+	// Otherwise keep the resident, drop the newcomer.
+	// (The periodic ping/health loop will evict bad nodes later.)
 	return nil
 }
 
@@ -1471,71 +1403,59 @@ func (s *DHT) storeToAlphaNodes(ctx context.Context, nl *NodeList, data []byte, 
 	storeCount := int32(0)
 	alphaCh := make(chan bool, Alpha)
 
-	// Start by sending the first Alpha requests in parallel
+	// Launch up to Alpha requests in parallel (non-banned only)
+	launched := 0
 	for i := 0; i < Alpha && i < nl.Len(); i++ {
 		n := nl.Nodes[i]
-
 		if s.ignorelist.Banned(n) {
 			continue
 		}
-
+		launched++
 		go func(n *Node) {
-
 			request := &StoreDataRequest{Data: data, Type: typ}
 			response, err := s.sendStoreData(ctx, n, request)
 			if err != nil {
-				errorFields := logtrace.Fields{
+				logtrace.Error(ctx, "Send store data failed", logtrace.Fields{
 					logtrace.FieldModule: "p2p",
 					"node":               n.String(),
 					"task_id":            taskID,
 					logtrace.FieldError:  err.Error(),
-				}
-				logtrace.Error(ctx, "Send store data failed", errorFields)
+				})
 				alphaCh <- false
-			} else if response.Status.Result != ResultOk {
-				errorFields := logtrace.Fields{
+				return
+			}
+			if response.Status.Result != ResultOk {
+				logtrace.Error(ctx, "Reply store data failed", logtrace.Fields{
 					logtrace.FieldModule: "p2p",
 					"node":               n.String(),
 					"task_id":            taskID,
 					logtrace.FieldError:  response.Status.ErrMsg,
-				}
-				logtrace.Error(ctx, "Reply store data failed", errorFields)
+				})
 				alphaCh <- false
-			} else {
-				atomic.AddInt32(&storeCount, 1)
-				alphaCh <- true
+				return
 			}
+			atomic.AddInt32(&storeCount, 1)
+			alphaCh <- true
 		}(n)
 	}
-	skey, _ := utils.Blake3Hash(data)
 
-	// Collect results from parallel requests
-	for i := 0; i < Alpha && i < len(nl.Nodes); i++ {
+	// Collect only what we launched
+	for i := 0; i < launched; i++ {
 		<-alphaCh
-		if atomic.LoadInt32(&storeCount) >= int32(Alpha) {
-			nl.TopN(Alpha)
-			return nil
-		}
 	}
 
+	// If needed, continue sequentially
 	finalStoreCount := atomic.LoadInt32(&storeCount)
-	// If storeCount is still < Alpha, send requests sequentially until it reaches Alpha
-	for i := Alpha; i < len(nl.Nodes); i++ {
-		if finalStoreCount >= int32(Alpha) {
-			break
-		}
-
+	for i := Alpha; i < nl.Len() && finalStoreCount < int32(Alpha); i++ {
 		n := nl.Nodes[i]
-
 		if s.ignorelist.Banned(n) {
-			logtrace.Info(ctx, "Ignore node as its continuous failed count is above threshold", logtrace.Fields{
+			logtrace.Info(ctx, "Ignore banned node during sequential store", logtrace.Fields{
 				logtrace.FieldModule: "p2p",
 				"node":               n.String(),
 				"task_id":            taskID,
 			})
 			continue
 		}
-
 		request := &StoreDataRequest{Data: data, Type: typ}
 		response, err := s.sendStoreData(ctx, n, request)
 		if err != nil {
@@ -1545,17 +1465,21 @@ func (s *DHT) storeToAlphaNodes(ctx context.Context, nl *NodeList, data []byte, 
 				"task_id":            taskID,
 				logtrace.FieldError:  err.Error(),
 			})
-		} else if response.Status.Result != ResultOk {
+			continue
+		}
+		if response.Status.Result != ResultOk {
 			logtrace.Error(ctx, "Reply store data failed", logtrace.Fields{
 				logtrace.FieldModule: "p2p",
 				"node":               n.String(),
 				"task_id":            taskID,
 				logtrace.FieldError:  response.Status.ErrMsg,
 			})
-		} else {
-			finalStoreCount++
+			continue
 		}
+		finalStoreCount++
 	}
+
+	skey, _ := utils.Blake3Hash(data)
 
 	if finalStoreCount >= int32(Alpha) {
 		logtrace.Info(ctx, "Store data to alpha nodes success", logtrace.Fields{
@@ -1564,15 +1488,16 @@ func (s *DHT) storeToAlphaNodes(ctx context.Context, nl *NodeList, data []byte, 
 			"len_total_nodes":    nl.Len(),
 			"skey":               hex.EncodeToString(skey),
 		})
+		nl.TopN(Alpha)
 		return nil
 	}
+
 	logtrace.Info(ctx, "Store data to alpha nodes failed", logtrace.Fields{
 		logtrace.FieldModule: "dht",
 		"task_id":            taskID,
 		"store_count":        finalStoreCount,
 		"skey":               hex.EncodeToString(skey),
 	})
-
 	return fmt.Errorf("store data to alpha nodes failed, only %d nodes stored", finalStoreCount)
 }
 
@@ -1589,7 +1514,7 @@ func (s *DHT) removeNode(ctx context.Context, node *Node) {
 
 	index := s.ht.bucketIndex(s.ht.self.HashedID, node.HashedID)
 
-	if removed := s.ht.RemoveNode(index, node.ID); !removed {
+	if removed := s.ht.RemoveNode(index, node.HashedID); !removed {
 		logtrace.Error(ctx, "Remove node not found in bucket", logtrace.Fields{
 			logtrace.FieldModule: "p2p",
 			"node":               node.String(),
@@ -1658,102 +1583,12 @@ func (s *DHT) IterateBatchStore(ctx context.Context, values [][]byte, typ int, i
 	for i := 0; i < len(values); i++ {
 		target, _ := utils.Blake3Hash(values[i])
 		hashes[i] = target
-		top6 := s.ht.closestContactsWithInlcudingNode(Alpha, target, s.ignorelist.ToNodeList(), nil)
+		top6 := s.ht.closestContactsWithIncludingNode(Alpha, target, s.ignorelist.ToNodeList(), nil)
 
 		globalClosestContacts[base58.Encode(target)] = top6
 		// log.WithContext(ctx).WithField("top 6", top6).Info("iterate batch store begin")
 		s.addKnownNodes(ctx, top6.Nodes, knownNodes)
 	}
-
-	// var changed bool
-	// var i int
-	// for {
-	// 	i++
-	// 	logtrace.Info(ctx, "Iterate batch store begin", logtrace.Fields{
-	// 		logtrace.FieldModule: "dht",
-	// 		"task_id":            id,
-	// 		"iter":               i,
-	// 		"keys":               len(values),
-	// 	})
-	// 	changed = false
-	// 	localClosestNodes := make(map[string]*NodeList)
-	// 	responses, atleastOneContacted := s.batchFindNode(ctx, hashes, knownNodes, contacted, id)
-
-	// 	if !atleastOneContacted {
-	// 		logtrace.Info(ctx, "Break", logtrace.Fields{
-	// 			logtrace.FieldModule: "dht",
-	// 		})
-	// 		break
-	// 	}
-
-	// 	for response := range responses {
-	// 		if response.Error != nil {
-	// 			logtrace.Error(ctx, "Batch find node failed on a node", logtrace.Fields{
-	// 				logtrace.FieldModule: "dht",
-	// 				"task_id":            id,
-	// 				logtrace.FieldError:  response.Error.Error(),
-	// 			})
-	// 			continue
-	// 		}
-
-	// 		if response.Message == nil {
-	// 			continue
-	// 		}
-
-	// 		v, ok := response.Message.Data.(*BatchFindNodeResponse)
-	// 		if ok && v.Status.Result == ResultOk {
-	// 			for key, nodesList := range v.ClosestNodes {
-	// 				if nodesList != nil {
-	// 					nl, exists := localClosestNodes[key]
-	// 					if exists {
-	// 						nl.AddNodes(nodesList)
-	// 						localClosestNodes[key] = nl
-	// 					} else {
-	// 						localClosestNodes[key] = &NodeList{Nodes: nodesList, Comparator: base58.Decode(key)}
-	// 					}
-
-	// 					s.addKnownNodes(ctx, nodesList, knownNodes)
-	// 				}
-	// 			}
-	// 		}
-	// 	}
-
-	// 	// we now need to check if the nodes in the globalClosestContacts Map are still in the top 6
-	// 	// if yes, we can store the data to them
-	// 	// if not, we need to send calls to the newly found nodes to inquire about the top 6 nodes
-	// 	logtrace.Info(ctx, "Check closest nodes & begin store", logtrace.Fields{
-	// 		logtrace.FieldModule: "dht",
-	// 		"task_id":            id,
-	// 		"iter":               i,
-	// 		"keys":               len(values),
-	// 	})
-	// 	for key, nodesList := range localClosestNodes {
-	// 		if nodesList == nil {
-	// 			continue
-	// 		}
-
-	// 		nodesList.Comparator = base58.Decode(key)
-	// 		nodesList.Sort()
-	// 		nodesList.TopN(Alpha)
-	// 		s.addKnownNodes(ctx, nodesList.Nodes, knownNodes)
-
-	// 		if !haveAllNodes(nodesList.Nodes, globalClosestContacts[key].Nodes) {
-	// 			changed = true
-	// 		}
-
-	// 		nodesList.AddNodes(globalClosestContacts[key].Nodes)
-	// 		nodesList.Sort()
-	// 		nodesList.TopN(Alpha)
-	// 		globalClosestContacts[key] = nodesList
-	// 	}
-
-	// 	if !changed {
-	// 		break
-	// 	}
-	// }
-
-	// assume at this point, we have True\Golabl top 6 nodes for each symbol's hash stored in globalClosestContacts Map
-	// we now need to store the data to these nodes
 
 	storageMap := make(map[string][]int) // This will store the index of the data in the values array that needs to be stored to the node
 	for i := 0; i < len(hashes); i++ {
@@ -1880,7 +1715,10 @@ func (s *DHT) batchStoreNetwork(ctx context.Context, values [][]byte, nodes map[
 				request := s.newMessage(BatchStoreData, receiver, data)
 				response, err := s.network.Call(ctx, request, false)
 				if err != nil {
-					s.ignorelist.IncrementCount(receiver)
+					if !isLocalCancel(err) {
+						s.ignorelist.IncrementCount(receiver)
+					}
+
 					logtrace.Info(ctx, "Network call batch store request failed", logtrace.Fields{
 						logtrace.FieldModule: "p2p",
 						logtrace.FieldError:  err.Error(),
@@ -1951,7 +1789,10 @@ func (s *DHT) batchFindNode(ctx context.Context, payload [][]byte, nodes map[str
 				request := s.newMessage(BatchFindNode, receiver, data)
 				response, err := s.network.Call(ctx, request, false)
 				if err != nil {
-					s.ignorelist.IncrementCount(receiver)
+					if !isLocalCancel(err) {
+						s.ignorelist.IncrementCount(receiver)
+					}
+
 					logtrace.Warn(ctx, "Batch find node network call request failed", logtrace.Fields{
 						logtrace.FieldModule: "dht",
 						"node":               receiver.String(),
@@ -1976,4 +1817,11 @@ func (s *DHT) batchFindNode(ctx context.Context, payload [][]byte, nodes map[str
 	})
 
 	return responses, atleastOneContacted
+}
+
+// addKnownNodesSafe wraps addKnownNodes with a mutex to avoid concurrent writes to knownNodes.
+func (s *DHT) addKnownNodesSafe(ctx context.Context, nodes []*Node, knownNodes map[string]*Node, mu *sync.Mutex) {
+	mu.Lock()
+	s.addKnownNodes(ctx, nodes, knownNodes)
+	mu.Unlock()
 }

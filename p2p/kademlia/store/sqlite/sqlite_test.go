@@ -182,5 +182,7 @@ func TestStore(t *testing.T) {
 	os.Remove("data001-migration-meta.sqlite3")
 	os.Remove("data001.sqlite3-shm")
 	os.Remove("data001.sqlite3-wal")
+	os.Remove("data001-migration-meta.sqlite3-shm")
+	os.Remove("data001-migration-meta.sqlite3-wal")
 
 }

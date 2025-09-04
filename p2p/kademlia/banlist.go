@@ -10,7 +10,7 @@ import (
 
 const (
 	// banDuration - ban duration
-	banDuration = 3 * time.Hour
+	banDuration = 1 * time.Hour
 
 	// threshold - number of failures required to consider a node banned.
 	// failures before treating a node as banned.
@@ -170,14 +170,15 @@ func (s *BanList) ToNodeList() []*Node {
 	s.mtx.RLock()
 	defer s.mtx.RUnlock()
 
-	ret := make([]*Node, 0)
-
+	ret := make([]*Node, 0, len(s.Nodes))
 	for i := 0; i < len(s.Nodes); i++ {
 		if s.Nodes[i].count > threshold {
-			ret = append(ret, &s.Nodes[i].Node)
+
+			n := s.Nodes[i].Node
+			n.SetHashedID()
+			ret = append(ret, &n)
 		}
 	}
-
 	return ret
 }
 

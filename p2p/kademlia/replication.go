@@ -173,7 +173,7 @@ func (s *DHT) Replicate(ctx context.Context) {
 
 	for i := 0; i < len(replicationKeys); i++ {
 		decKey, _ := hex.DecodeString(replicationKeys[i].Key)
-		closestContactsMap[replicationKeys[i].Key] = s.ht.closestContactsWithInlcudingNode(Alpha, decKey, ignores, self).NodeIDs()
+		closestContactsMap[replicationKeys[i].Key] = s.ht.closestContactsWithIncludingNode(Alpha, decKey, ignores, self).NodeIDs()
 	}
 
 	for _, info := range repInfo {
@@ -288,7 +288,7 @@ func (s *DHT) adjustNodeKeys(ctx context.Context, from time.Time, info domain.No
 
 		// get closest contacts to the key
 		key, _ := hex.DecodeString(replicationKeys[i].Key)
-		nodeList := s.ht.closestContactsWithInlcudingNode(Alpha+1, key, updatedIgnored, offNode) // +1 because we want to include the node we are adjusting
+		nodeList := s.ht.closestContactsWithIncludingNode(Alpha+1, key, updatedIgnored, offNode) // +1 because we want to include the node we are adjusting
 		// check if the node that is gone was supposed to hold the key
 		if !nodeList.Exists(offNode) {
 			// the node is not supposed to hold this key as its not in 6 closest contacts

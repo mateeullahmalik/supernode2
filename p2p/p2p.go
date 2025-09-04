@@ -93,13 +93,6 @@ func (s *p2p) run(ctx context.Context) error {
 		logtrace.Error(ctx, "failed to configure bootstrap nodes", logtrace.Fields{logtrace.FieldModule: "p2p", logtrace.FieldError: err})
 		logtrace.Error(ctx, "failed to get bootstap ip", logtrace.Fields{logtrace.FieldModule: "p2p", logtrace.FieldError: err})
 	}
-
-	// join the kademlia network if bootstrap nodes is set
-	if err := s.dht.Bootstrap(ctx, s.config.BootstrapNodes); err != nil {
-		// stop the node for kademlia network
-		s.dht.Stop(ctx)
-		return errors.Errorf("bootstrap the node: %w", err)
-	}
 	s.running = true
 
 	logtrace.Info(ctx, "p2p service is started", logtrace.Fields{})

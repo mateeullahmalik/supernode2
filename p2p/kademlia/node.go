@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"math/big"
 	"sort"
 	"strings"
 	"sync"
@@ -47,8 +46,6 @@ type NodeList struct {
 	Comparator []byte
 
 	Mux sync.RWMutex
-
-	debug bool
 }
 
 // String returns the dump information for node list
@@ -63,57 +60,12 @@ func (s *NodeList) String() string {
 	return strings.Join(nodes, ",")
 }
 
-// DelNode deletes a node from list
-func (s *NodeList) DelNode(node *Node) {
-	s.Mux.Lock()
-	defer s.Mux.Unlock()
-
-	for i := 0; i < s.Len(); i++ {
-		if bytes.Equal(s.Nodes[i].ID, node.ID) {
-			newList := s.Nodes[:i]
-			if i+1 < s.Len() {
-				newList = append(newList, s.Nodes[i+1:]...)
-			}
-
-			s.Nodes = newList
-
-			return
-		}
-	}
-}
-
-func haveAllNodes(nodesA []*Node, nodesB []*Node) bool {
-	for _, nodeA := range nodesA {
-		found := false
-		for _, nodeB := range nodesB {
-			if bytes.Equal(nodeA.ID, nodeB.ID) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
-	}
-
-	return true
-}
-
 // Exists return true if the node is already there
 func (s *NodeList) Exists(node *Node) bool {
 	s.Mux.RLock()
 	defer s.Mux.RUnlock()
 
 	return s.exists(node)
-}
-
-func (s *NodeList) exists(node *Node) bool {
-	for i := 0; i < len(s.Nodes); i++ {
-		if bytes.Equal(s.Nodes[i].ID, node.ID) {
-			return true
-		}
-	}
-	return false
 }
 
 // AddNodes appends the nodes to node list if it's not existed
@@ -154,13 +106,6 @@ func (s *NodeList) TopN(n int) {
 	}
 }
 
-func (s *NodeList) distance(id1, id2 []byte) *big.Int {
-	o1 := new(big.Int).SetBytes(id1)
-	o2 := new(big.Int).SetBytes(id2)
-
-	return new(big.Int).Xor(o1, o2)
-}
-
 // Sort sorts nodes
 func (s *NodeList) Sort() {
 	if len(s.Comparator) == 0 {
@@ -180,15 +125,20 @@ func (s *NodeList) Swap(i, j int) {
 	}
 }
 
-// Less compare two nodes
 func (s *NodeList) Less(i, j int) bool {
-	if i >= 0 && i < s.Len() && j >= 0 && j < s.Len() {
-		id := s.distance(s.Nodes[i].HashedID, s.Comparator)
-		jd := s.distance(s.Nodes[j].HashedID, s.Comparator)
-
-		return id.Cmp(jd) == -1
+	if i < 0 || j < 0 || i >= s.Len() || j >= s.Len() || len(s.Comparator) != 32 {
+		return false
 	}
-
+	ai := s.Nodes[i].HashedID
+	aj := s.Nodes[j].HashedID
+	// Compare big-endian XOR distance: (ai ^ comp) < (aj ^ comp)
+	for k := 0; k < 32; k++ {
+		di := ai[k] ^ s.Comparator[k]
+		dj := aj[k] ^ s.Comparator[k]
+		if di != dj {
+			return di < dj
+		}
+	}
 	return false
 }
 
@@ -216,4 +166,40 @@ func (s *NodeList) NodeIPs() []string {
 	}
 
 	return out
+}
+
+func (s *NodeList) DelNode(node *Node) {
+	s.Mux.Lock()
+	defer s.Mux.Unlock()
+	for i := 0; i < s.Len(); i++ {
+		if bytes.Equal(s.Nodes[i].HashedID, node.HashedID) {
+			s.Nodes = append(s.Nodes[:i], s.Nodes[i+1:]...)
+			return
+		}
+	}
+}
+
+func haveAllNodes(a, b []*Node) bool {
+	for _, x := range a {
+		found := false
+		for _, y := range b {
+			if bytes.Equal(x.HashedID, y.HashedID) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *NodeList) exists(node *Node) bool {
+	for i := 0; i < len(s.Nodes); i++ {
+		if bytes.Equal(s.Nodes[i].HashedID, node.HashedID) {
+			return true
+		}
+	}
+	return false
 }
