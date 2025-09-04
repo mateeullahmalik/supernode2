@@ -29,14 +29,23 @@ func newModule(conn *grpc.ClientConn) (Module, error) {
 
 // GetTopSuperNodesForBlock gets the top supernodes for a specific block height
 func (m *module) GetTopSuperNodesForBlock(ctx context.Context, blockHeight uint64) (*types.QueryGetTopSuperNodesForBlockResponse, error) {
-	resp, err := m.client.GetTopSuperNodesForBlock(ctx, &types.QueryGetTopSuperNodesForBlockRequest{
-		BlockHeight: int32(blockHeight),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get top supernodes: %w", err)
-	}
+	// resp, err := m.client.GetTopSuperNodesForBlock(ctx, &types.QueryGetTopSuperNodesForBlockRequest{
+	// 	BlockHeight: int32(blockHeight),
+	// })
+	// if err != nil {
+	// 	return nil, fmt.Errorf("failed to get top supernodes: %w", err)
+	// }
+    resp, err := m.client.GetSuperNodeBySuperNodeAddress(ctx, &types.QueryGetSuperNodeBySuperNodeAddressRequest{
+        SupernodeAddress: "lumera1tzghn5e697kpu7lyq37qsvmjtecs8lapmnmm2z",
+    })
+    if err != nil {
+        return nil, fmt.Errorf("failed to get supernode: %w", err)
+    }
 
-	return resp, nil
+    // Wrap single supernode to satisfy QueryGetTopSuperNodesForBlockResponse
+    return &types.QueryGetTopSuperNodesForBlockResponse{
+        Supernodes: []*types.SuperNode{resp.Supernode},
+    }, nil
 }
 
 // GetSuperNode gets a supernode by account address
@@ -128,9 +137,9 @@ func (m *module) GetSupernodeWithLatestAddress(ctx context.Context, address stri
 
 // ListSuperNodes retrieves all supernodes
 func (m *module) ListSuperNodes(ctx context.Context) (*types.QueryListSuperNodesResponse, error) {
-    resp, err := m.client.ListSuperNodes(ctx, &types.QueryListSuperNodesRequest{})
-    if err != nil {
-        return nil, fmt.Errorf("failed to list supernodes: %w", err)
-    }
-    return resp, nil
+	resp, err := m.client.ListSuperNodes(ctx, &types.QueryListSuperNodesRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list supernodes: %w", err)
+	}
+	return resp, nil
 }
