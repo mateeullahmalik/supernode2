@@ -14,9 +14,9 @@ import (
 	"github.com/LumeraProtocol/supernode/v2/pkg/errors"
 	"github.com/LumeraProtocol/supernode/v2/pkg/logtrace"
 	"github.com/LumeraProtocol/supernode/v2/pkg/lumera/modules/supernode"
+	cm "github.com/LumeraProtocol/supernode/v2/pkg/p2pmetrics"
 	"github.com/LumeraProtocol/supernode/v2/pkg/utils"
 	"github.com/LumeraProtocol/supernode/v2/supernode/services/cascade/adaptors"
-    cm "github.com/LumeraProtocol/supernode/v2/pkg/p2pmetrics"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/golang/protobuf/proto"
@@ -199,17 +199,17 @@ func (task *CascadeRegistrationTask) wrapErr(ctx context.Context, msg string, er
 // emitArtefactsStored builds a single-line metrics summary and emits the
 // SupernodeEventTypeArtefactsStored event while logging the metrics line.
 func (task *CascadeRegistrationTask) emitArtefactsStored(
-    ctx context.Context,
-    fields logtrace.Fields,
-    _ codec.Layout,
-    send func(resp *RegisterResponse) error,
+	ctx context.Context,
+	fields logtrace.Fields,
+	_ codec.Layout,
+	send func(resp *RegisterResponse) error,
 ) {
 	if fields == nil {
 		fields = logtrace.Fields{}
 	}
 
-    // Build payload strictly from internal collector (no P2P snapshots)
-    payload := cm.BuildStoreEventPayloadFromCollector(task.ID())
+	// Build payload strictly from internal collector (no P2P snapshots)
+	payload := cm.BuildStoreEventPayloadFromCollector(task.ID())
 
 	b, _ := json.MarshalIndent(payload, "", "  ")
 	msg := string(b)
@@ -247,6 +247,20 @@ func decodeMetadataFile(data string) (layout codec.Layout, err error) {
 }
 
 func verifyIDs(ticketMetadata, metadata codec.Layout) error {
+	// Basic structural checks to avoid panics
+	if len(ticketMetadata.Blocks) == 0 {
+		return errors.New("ticket metadata has no blocks")
+	}
+	if len(metadata.Blocks) == 0 {
+		return errors.New("encoded metadata has no blocks")
+	}
+	if len(ticketMetadata.Blocks[0].Symbols) == 0 {
+		return errors.New("ticket metadata has no symbols")
+	}
+	if len(metadata.Blocks[0].Symbols) == 0 {
+		return errors.New("encoded metadata has no symbols")
+	}
+
 	// Verify that the symbol identifiers match between versions
 	if err := utils.EqualStrList(ticketMetadata.Blocks[0].Symbols, metadata.Blocks[0].Symbols); err != nil {
 		return errors.Errorf("symbol identifiers don't match: %w", err)

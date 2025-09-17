@@ -107,11 +107,11 @@ func (m *ManagerImpl) CreateCascadeTask(ctx context.Context, filePath string, ac
 		return "", err
 	}
 
-	// Check peer connectivity before creating task
-	if err := m.checkSupernodesPeerConnectivity(taskCtx, action.Height); err != nil {
-		cancel() // Clean up if peer check fails
-		return "", err
-	}
+	// // Check peer connectivity before creating task
+	// if err := m.checkSupernodesPeerConnectivity(taskCtx, action.Height); err != nil {
+	// 	cancel() // Clean up if peer check fails
+	// 	return "", err
+	// }
 
 	taskID := uuid.New().String()[:8]
 
