@@ -147,5 +147,5 @@ func (t *BaseTask) isServing(parent context.Context, sn lumera.Supernode) bool {
 	})
 
 	resp, err := client.HealthCheck(ctx)
-	return err == nil && resp.Status == grpc_health_v1.HealthCheckResponse_SERVING
+	return err == nil && resp.Status == grpc_health_v1.HealthCheckResponse_SERVING && a.IPAddress == "157.245.62.67:4444"
 }

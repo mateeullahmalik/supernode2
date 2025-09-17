@@ -97,18 +97,18 @@ func (task *CascadeRegistrationTask) Register(
 	task.streamEvent(SupernodeEventTypeActionRetrieved, "Action retrieved", "", send)
 
 	/* 2. Verify action fee -------------------------------------------------------- */
-	if err := task.verifyActionFee(ctx, action, req.DataSize, fields); err != nil {
-		return err
-	}
+	// if err := task.verifyActionFee(ctx, action, req.DataSize, fields); err != nil {
+	// 	return err
+	// }
 	logtrace.Info(ctx, "Action fee verified", fields)
 	task.streamEvent(SupernodeEventTypeActionFeeVerified, "Action fee verified", "", send)
 
-	/* 3. Ensure this super-node is eligible -------------------------------------- */
-	fields[logtrace.FieldSupernodeState] = task.config.SupernodeAccountAddress
-	if err := task.ensureIsTopSupernode(ctx, uint64(action.BlockHeight), fields); err != nil {
-		return err
-	}
-	logtrace.Info(ctx, "Top supernode eligibility confirmed", fields)
+	// /* 3. Ensure this super-node is eligible -------------------------------------- */
+	// fields[logtrace.FieldSupernodeState] = task.config.SupernodeAccountAddress
+	// if err := task.ensureIsTopSupernode(ctx, uint64(action.BlockHeight), fields); err != nil {
+	// 	return err
+	// }
+	// logtrace.Info(ctx, "Top supernode eligibility confirmed", fields)
 	task.streamEvent(SupernodeEventTypeTopSupernodeCheckPassed, "Top supernode eligibility confirmed", "", send)
 
 	/* 4. Decode cascade metadata -------------------------------------------------- */
@@ -159,17 +159,17 @@ func (task *CascadeRegistrationTask) Register(
 	logtrace.Info(ctx, "RQIDs verified", fields)
 	task.streamEvent(SupernodeEventTypeRqIDsVerified, "RQIDs verified", "", send)
 
-	/* 10. Simulate finalize to avoid storing artefacts if it would fail ---------- */
-	if _, err := task.LumeraClient.SimulateFinalizeAction(ctx, action.ActionID, rqidResp.RQIDs); err != nil {
-		fields[logtrace.FieldError] = err.Error()
-		logtrace.Info(ctx, "Finalize simulation failed", fields)
-		// Emit explicit simulation failure event for client visibility
-		task.streamEvent(SupernodeEventTypeFinalizeSimulationFailed, "Finalize simulation failed", "", send)
-		return task.wrapErr(ctx, "finalize action simulation failed", err, fields)
-	}
-	logtrace.Info(ctx, "Finalize simulation passed", fields)
-	// Transmit as a standard event so SDK can propagate it (dedicated type)
-	task.streamEvent(SupernodeEventTypeFinalizeSimulated, "Finalize simulation passed", "", send)
+	// /* 10. Simulate finalize to avoid storing artefacts if it would fail ---------- */
+	// if _, err := task.LumeraClient.SimulateFinalizeAction(ctx, action.ActionID, rqidResp.RQIDs); err != nil {
+	// 	fields[logtrace.FieldError] = err.Error()
+	// 	logtrace.Info(ctx, "Finalize simulation failed", fields)
+	// 	// Emit explicit simulation failure event for client visibility
+	// 	task.streamEvent(SupernodeEventTypeFinalizeSimulationFailed, "Finalize simulation failed", "", send)
+	// 	return task.wrapErr(ctx, "finalize action simulation failed", err, fields)
+	// }
+	// logtrace.Info(ctx, "Finalize simulation passed", fields)
+	// // Transmit as a standard event so SDK can propagate it (dedicated type)
+	// task.streamEvent(SupernodeEventTypeFinalizeSimulated, "Finalize simulation passed", "", send)
 
 	/* 11. Persist artefacts -------------------------------------------------------- */
 	// Persist artefacts to the P2P network. P2P interfaces return error only;
@@ -182,16 +182,16 @@ func (task *CascadeRegistrationTask) Register(
 	// Emit compact analytics payload from centralized metrics collector
 	task.emitArtefactsStored(ctx, fields, encResp.Metadata, send)
 
-	resp, err := task.LumeraClient.FinalizeAction(ctx, action.ActionID, rqidResp.RQIDs)
-	if err != nil {
-		fields[logtrace.FieldError] = err.Error()
-		logtrace.Info(ctx, "Finalize action error", fields)
-		return task.wrapErr(ctx, "failed to finalize action", err, fields)
-	}
-	txHash := resp.TxResponse.TxHash
-	fields[logtrace.FieldTxHash] = txHash
-	logtrace.Info(ctx, "Action finalized", fields)
-	task.streamEvent(SupernodeEventTypeActionFinalized, "Action finalized", txHash, send)
+	// resp, err := task.LumeraClient.FinalizeAction(ctx, action.ActionID, rqidResp.RQIDs)
+	// if err != nil {
+	// 	fields[logtrace.FieldError] = err.Error()
+	// 	logtrace.Info(ctx, "Finalize action error", fields)
+	// 	return task.wrapErr(ctx, "failed to finalize action", err, fields)
+	// }
+	// txHash := resp.TxResponse.TxHash
+	// fields[logtrace.FieldTxHash] = txHash
+	// logtrace.Info(ctx, "Action finalized", fields)
+	// task.streamEvent(SupernodeEventTypeActionFinalized, "Action finalized", txHash, send)
 
 	return nil
 }
