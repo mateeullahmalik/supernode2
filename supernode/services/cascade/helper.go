@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	stdmath "math"
 	"strconv"
 	"strings"
 
@@ -15,6 +14,7 @@ import (
 	"github.com/LumeraProtocol/supernode/v2/pkg/errors"
 	"github.com/LumeraProtocol/supernode/v2/pkg/logtrace"
 	"github.com/LumeraProtocol/supernode/v2/pkg/lumera/modules/supernode"
+	cm "github.com/LumeraProtocol/supernode/v2/pkg/p2pmetrics"
 	"github.com/LumeraProtocol/supernode/v2/pkg/utils"
 	"github.com/LumeraProtocol/supernode/v2/supernode/services/cascade/adaptors"
 
@@ -24,6 +24,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+// layout stats helpers removed to keep download metrics minimal.
 
 func (task *CascadeRegistrationTask) fetchAction(ctx context.Context, actionID string, f logtrace.Fields) (*actiontypes.Action, error) {
 	res, err := task.LumeraClient.GetAction(ctx, actionID)
@@ -171,14 +173,8 @@ func (task *CascadeRegistrationTask) generateRQIDFiles(ctx context.Context, meta
 }
 
 // storeArtefacts persists cascade artefacts (ID files + RaptorQ symbols) via the
-// P2P adaptor and returns an aggregated network success rate percentage and total
-// node requests used to compute it.
-//
-// Aggregation details:
-//   - Underlying batches return (ratePct, requests) where `requests` is the number
-//     of node RPCs attempted. The adaptor computes a weighted average by requests
-//     across all batches, reflecting the overall network success rate.
-func (task *CascadeRegistrationTask) storeArtefacts(ctx context.Context, actionID string, idFiles [][]byte, symbolsDir string, f logtrace.Fields) (adaptors.StoreArtefactsMetrics, error) {
+// P2P adaptor. P2P does not return metrics; cascade summarizes and emits them.
+func (task *CascadeRegistrationTask) storeArtefacts(ctx context.Context, actionID string, idFiles [][]byte, symbolsDir string, f logtrace.Fields) error {
 	return task.P2P.StoreArtefacts(ctx, adaptors.StoreArtefactsRequest{
 		IDFiles:    idFiles,
 		SymbolsDir: symbolsDir,
@@ -204,21 +200,23 @@ func (task *CascadeRegistrationTask) wrapErr(ctx context.Context, msg string, er
 // SupernodeEventTypeArtefactsStored event while logging the metrics line.
 func (task *CascadeRegistrationTask) emitArtefactsStored(
 	ctx context.Context,
-	metrics adaptors.StoreArtefactsMetrics,
 	fields logtrace.Fields,
+	_ codec.Layout,
 	send func(resp *RegisterResponse) error,
 ) {
-	ok := int(stdmath.Round(metrics.AggregatedRate / 100.0 * float64(metrics.TotalRequests)))
-	fail := metrics.TotalRequests - ok
-	line := fmt.Sprintf(
-		"artefacts stored | success_rate=%.2f%% agg_rate=%.2f%% total_reqs=%d ok=%d fail=%d meta_rate=%.2f%% meta_reqs=%d meta_count=%d sym_rate=%.2f%% sym_reqs=%d sym_count=%d",
-		metrics.AggregatedRate, metrics.AggregatedRate, metrics.TotalRequests, ok, fail,
-		metrics.MetaRate, metrics.MetaRequests, metrics.MetaCount,
-		metrics.SymRate, metrics.SymRequests, metrics.SymCount,
-	)
-	fields["metrics"] = line
+	if fields == nil {
+		fields = logtrace.Fields{}
+	}
+
+	// Build payload strictly from internal collector (no P2P snapshots)
+	payload := cm.BuildStoreEventPayloadFromCollector(task.ID())
+
+	b, _ := json.MarshalIndent(payload, "", "  ")
+	msg := string(b)
+	fields["metrics_json"] = msg
 	logtrace.Info(ctx, "artefacts have been stored", fields)
-	task.streamEvent(SupernodeEventTypeArtefactsStored, line, "", send)
+	task.streamEvent(SupernodeEventTypeArtefactsStored, msg, "", send)
+	// No central state to clear; adaptor returns calls inline
 }
 
 // extractSignatureAndFirstPart extracts the signature and first part from the encoded data
@@ -249,6 +247,20 @@ func decodeMetadataFile(data string) (layout codec.Layout, err error) {
 }
 
 func verifyIDs(ticketMetadata, metadata codec.Layout) error {
+	// Basic structural checks to avoid panics
+	if len(ticketMetadata.Blocks) == 0 {
+		return errors.New("ticket metadata has no blocks")
+	}
+	if len(metadata.Blocks) == 0 {
+		return errors.New("encoded metadata has no blocks")
+	}
+	if len(ticketMetadata.Blocks[0].Symbols) == 0 {
+		return errors.New("ticket metadata has no symbols")
+	}
+	if len(metadata.Blocks[0].Symbols) == 0 {
+		return errors.New("encoded metadata has no symbols")
+	}
+
 	// Verify that the symbol identifiers match between versions
 	if err := utils.EqualStrList(ticketMetadata.Blocks[0].Symbols, metadata.Blocks[0].Symbols); err != nil {
 		return errors.Errorf("symbol identifiers don't match: %w", err)

@@ -85,10 +85,6 @@ func (t *BaseTask) fetchSupernodes(ctx context.Context, height int64) (lumera.Su
 		return nil, errors.New("no supernodes found")
 	}
 
-	if len(sns) > 10 {
-		sns = sns[:10]
-	}
-
 	// Keep only SERVING nodes (done in parallel – keeps latency flat)
 	healthy := make(lumera.Supernodes, 0, len(sns))
 	eg, ctx := errgroup.WithContext(ctx)
@@ -113,6 +109,10 @@ func (t *BaseTask) fetchSupernodes(ctx context.Context, height int64) (lumera.Su
 		return nil, errors.New("no healthy supernodes found")
 	}
 
+	// Cap to top 10 after health filtering
+	if len(healthy) > 10 {
+		healthy = healthy[:10]
+	}
 	return healthy, nil
 }
 
@@ -131,6 +131,21 @@ func (t *BaseTask) isServing(parent context.Context, sn lumera.Supernode) bool {
 	}
 	defer client.Close(ctx)
 
+	a, aErr := client.GetSupernodeStatus(ctx)
+	if aErr != nil || a == nil {
+		// Avoid nil dereference; treat as not serving when status unavailable
+		logtrace.Info(ctx, "supernode status unavailable", logtrace.Fields{
+			logtrace.FieldMethod: "isServing",
+			logtrace.FieldError:  fmt.Sprintf("%v", aErr),
+		})
+		return false
+	}
+
+	logtrace.Info(ctx, "version", logtrace.Fields{
+		"version": a.Version,
+		"ip":      a.IPAddress,
+	})
+
 	resp, err := client.HealthCheck(ctx)
-	return err == nil && resp.Status == grpc_health_v1.HealthCheckResponse_SERVING
+	return err == nil && resp.Status == grpc_health_v1.HealthCheckResponse_SERVING && a.IPAddress == "157.245.62.67:4444"
 }

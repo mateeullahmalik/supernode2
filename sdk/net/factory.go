@@ -3,6 +3,7 @@ package net
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/LumeraProtocol/lumera/x/lumeraid/securekeyx"
 	"github.com/LumeraProtocol/supernode/v2/pkg/net/grpc/client"
@@ -42,6 +43,12 @@ func NewClientFactory(ctx context.Context, logger log.Logger, keyring keyring.Ke
 	opts.MaxSendMsgSize = 16 * 1024 * 1024         // 16MB to match server
 	opts.InitialWindowSize = 16 * 1024 * 1024      // 16MB per stream (4x chunk size)
 	opts.InitialConnWindowSize = 160 * 1024 * 1024 // 160MB (16MB x 10 streams)
+	// Keep the gRPC connection alive during long server-side processing
+	// to prevent idle middleboxes from dropping the stream.
+	opts.KeepAliveTime = 30 * time.Second
+	opts.KeepAliveTimeout = 10 * time.Second
+	// Do not ping when idle to avoid server MinTime enforcement and GOAWAYs.
+	opts.AllowWithoutStream = false
 
 	return &ClientFactory{
 		logger:        logger,

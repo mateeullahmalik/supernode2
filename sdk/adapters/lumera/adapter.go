@@ -278,22 +278,25 @@ func getLatestState(supernode *sntypes.SuperNode) (*sntypes.SuperNodeStateRecord
 		return nil, fmt.Errorf("supernode is nil")
 	}
 
-	// Check if the slice has elements before accessing it
 	if len(supernode.States) == 0 {
 		return nil, fmt.Errorf("no state history exists for the supernode")
 	}
 
-	// Sort by height in descending order to get the latest first
-	sort.Slice(supernode.States, func(i, j int) bool {
-		return supernode.States[i].Height > supernode.States[j].Height
-	})
-
-	// Access the latest state safely
-	if supernode.States[0] == nil {
+	var latest *sntypes.SuperNodeStateRecord
+	var maxHeight int64 = -1
+	for _, st := range supernode.States {
+		if st == nil {
+			continue
+		}
+		if st.Height > maxHeight {
+			maxHeight = st.Height
+			latest = st
+		}
+	}
+	if latest == nil {
 		return nil, fmt.Errorf("latest state in history is nil")
 	}
-
-	return supernode.States[0], nil
+	return latest, nil
 }
 
 func getLatestIP(supernode *sntypes.SuperNode) (string, error) {
@@ -301,20 +304,23 @@ func getLatestIP(supernode *sntypes.SuperNode) (string, error) {
 		return "", fmt.Errorf("supernode is nil")
 	}
 
-	// Check if the slice has elements before accessing it
 	if len(supernode.PrevIpAddresses) == 0 {
 		return "", fmt.Errorf("no ip history exists for the supernode")
 	}
 
-	// Sort by height in descending order to get the latest first
-	sort.Slice(supernode.PrevIpAddresses, func(i, j int) bool {
-		return supernode.PrevIpAddresses[i].Height > supernode.PrevIpAddresses[j].Height
-	})
-
-	// Access the latest IP address safely
-	if supernode.PrevIpAddresses[0] == nil {
+	var latestAddr string
+	var maxHeight int64 = -1
+	for _, ipRec := range supernode.PrevIpAddresses {
+		if ipRec == nil {
+			continue
+		}
+		if ipRec.Height > maxHeight {
+			maxHeight = ipRec.Height
+			latestAddr = ipRec.Address
+		}
+	}
+	if latestAddr == "" {
 		return "", fmt.Errorf("latest IP address in history is nil")
 	}
-
-	return supernode.PrevIpAddresses[0].Address, nil
+	return latestAddr, nil
 }

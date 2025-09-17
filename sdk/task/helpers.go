@@ -43,10 +43,10 @@ func (m *ManagerImpl) validateAction(ctx context.Context, actionID string) (lume
 		return lumera.Action{}, fmt.Errorf("no action found with the specified ID")
 	}
 
-	// Check action state
-	if action.State != lumera.ACTION_STATE_PENDING {
-		return lumera.Action{}, fmt.Errorf("action is in %s state, expected PENDING", action.State)
-	}
+	// // Check action state
+	// if action.State != lumera.ACTION_STATE_PENDING {
+	// 	return lumera.Action{}, fmt.Errorf("action is in %s state, expected PENDING", action.State)
+	// }
 
 	return action, nil
 }

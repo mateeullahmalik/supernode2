@@ -69,6 +69,13 @@ type Network struct {
 	sem         *semaphore.Weighted
 
 	metrics sync.Map
+
+	// recent request tracking (last 10 entries overall and per IP)
+	recentMu              sync.Mutex
+	recentStoreOverall    []RecentBatchStoreEntry
+	recentStoreByIP       map[string][]RecentBatchStoreEntry
+	recentRetrieveOverall []RecentBatchRetrieveEntry
+	recentRetrieveByIP    map[string][]RecentBatchRetrieveEntry
 }
 
 // NewNetwork returns a network service
@@ -626,63 +633,65 @@ func (s *Network) Call(ctx context.Context, request *Message, isLong bool) (*Mes
 
 // ---- retryable RPC helpers -------------------------------------------------
 
+// Chunked write settings: keep simple and robust.
+const (
+	writeChunkSize    = 512 * 1024       // 512 KB per write
+	writeStallTimeout = 10 * time.Second // consider stalled if no progress for 10s
+)
+
 func (s *Network) rpcOnceWrapper(ctx context.Context, cw *connWrapper, remoteAddr string, data []byte, timeout time.Duration, msgType int) (*Message, error) {
-
-	sizeMB := float64(len(data)) / (1024.0 * 1024.0) // data is your gob-encoded message
-	throughputFloor := 8.0                           // MB/s (~64 Mbps)
-	est := time.Duration(sizeMB / throughputFloor * float64(time.Second))
-	base := 1 * time.Second
-	cushion := 5 * time.Second
-
-	writeDL := base + est + cushion
-	if writeDL < 5*time.Second {
-		writeDL = 5 * time.Second
-	}
-	if writeDL > timeout-1*time.Second {
-		writeDL = timeout - 1*time.Second
-	}
-
 	retried := false
 	for {
 		// lock the WHOLE RPC on a pooled wrapper
 		cw.mtx.Lock()
 
-		// write
-		if e := cw.secureConn.SetWriteDeadline(time.Now().Add(writeDL)); e != nil {
-			cw.mtx.Unlock()
-			s.dropFromPool(remoteAddr, cw)
-			return nil, errors.Errorf("set write deadline: %w", e)
-		}
-		if _, e := cw.secureConn.Write(data); e != nil {
-			cw.mtx.Unlock()
-			if isStaleConnError(e) && !retried {
-				logtrace.Info(ctx, "Stale pooled connection on write; redialing", logtrace.Fields{
-					logtrace.FieldModule: "p2p",
-					"remote":             remoteAddr,
-					"message_type":       msgType,
-				})
+		// write (chunked with stall-based deadline)
+		written := 0
+		for written < len(data) {
+			end := written + writeChunkSize
+			if end > len(data) {
+				end = len(data)
+			}
+			if e := cw.secureConn.SetWriteDeadline(time.Now().Add(writeStallTimeout)); e != nil {
+				cw.mtx.Unlock()
 				s.dropFromPool(remoteAddr, cw)
-				fresh, derr := NewSecureClientConn(ctx, s.clientTC, remoteAddr)
-				if derr != nil {
-					logtrace.Error(ctx, "Retry redial failed (write)", logtrace.Fields{
+				return nil, errors.Errorf("set write deadline: %w", e)
+			}
+			n, e := cw.secureConn.Write(data[written:end])
+			if n > 0 {
+				written += n
+			}
+			if e != nil {
+				cw.mtx.Unlock()
+				if isStaleConnError(e) && !retried {
+					logtrace.Info(ctx, "Stale pooled connection on write; redialing", logtrace.Fields{
 						logtrace.FieldModule: "p2p",
 						"remote":             remoteAddr,
 						"message_type":       msgType,
-						logtrace.FieldError:  derr.Error(),
 					})
-					return nil, errors.Errorf("re-dial after write: %w", derr)
+					s.dropFromPool(remoteAddr, cw)
+					fresh, derr := NewSecureClientConn(ctx, s.clientTC, remoteAddr)
+					if derr != nil {
+						logtrace.Error(ctx, "Retry redial failed (write)", logtrace.Fields{
+							logtrace.FieldModule: "p2p",
+							"remote":             remoteAddr,
+							"message_type":       msgType,
+							logtrace.FieldError:  derr.Error(),
+						})
+						return nil, errors.Errorf("re-dial after write: %w", derr)
+					}
+					s.addToPool(remoteAddr, fresh)
+					if nw, ok := fresh.(*connWrapper); ok {
+						cw = nw
+						retried = true
+						continue // retry whole RPC under the new wrapper
+					}
+					// Non-wrapper fallback retry
+					return s.rpcOnceNonWrapper(ctx, fresh, remoteAddr, data, timeout, msgType)
 				}
-				s.addToPool(remoteAddr, fresh)
-				if nw, ok := fresh.(*connWrapper); ok {
-					cw = nw
-					retried = true
-					continue // retry whole RPC under the new wrapper
-				}
-				// Non-wrapper fallback retry
-				return s.rpcOnceNonWrapper(ctx, fresh, remoteAddr, data, timeout, msgType)
+				s.dropFromPool(remoteAddr, cw)
+				return nil, errors.Errorf("conn write: %w", e)
 			}
-			s.dropFromPool(remoteAddr, cw)
-			return nil, errors.Errorf("conn write: %w", e)
 		}
 
 		// read
@@ -908,15 +917,38 @@ func (s *Network) handleBatchFindValues(ctx context.Context, message *Message, r
 }
 
 func (s *Network) handleGetValuesRequest(ctx context.Context, message *Message, reqID string) (res []byte, err error) {
+	start := time.Now()
+	appended := false
 	defer func() {
 		if response, err := s.handlePanic(ctx, message.Sender, BatchGetValues); response != nil || err != nil {
 			res = response
+			if !appended {
+				s.appendRetrieveEntry(message.Sender.IP, RecentBatchRetrieveEntry{
+					TimeUnix:   time.Now().UTC().Unix(),
+					SenderID:   string(message.Sender.ID),
+					SenderIP:   message.Sender.IP,
+					Requested:  0,
+					Found:      0,
+					DurationMS: time.Since(start).Milliseconds(),
+					Error:      "panic/recovered",
+				})
+			}
 		}
 	}()
 
 	request, ok := message.Data.(*BatchGetValuesRequest)
 	if !ok {
 		err := errors.New("invalid BatchGetValuesRequest")
+		s.appendRetrieveEntry(message.Sender.IP, RecentBatchRetrieveEntry{
+			TimeUnix:   time.Now().UTC().Unix(),
+			SenderID:   string(message.Sender.ID),
+			SenderIP:   message.Sender.IP,
+			Requested:  0,
+			Found:      0,
+			DurationMS: time.Since(start).Milliseconds(),
+			Error:      err.Error(),
+		})
+		appended = true
 		return s.generateResponseMessage(BatchGetValues, message.Sender, ResultFailed, err.Error())
 	}
 
@@ -937,6 +969,16 @@ func (s *Network) handleGetValuesRequest(ctx context.Context, message *Message, 
 	values, count, err := s.dht.store.RetrieveBatchValues(ctx, keys, true)
 	if err != nil {
 		err = errors.Errorf("batch find values: %w", err)
+		s.appendRetrieveEntry(message.Sender.IP, RecentBatchRetrieveEntry{
+			TimeUnix:   time.Now().UTC().Unix(),
+			SenderID:   string(message.Sender.ID),
+			SenderIP:   message.Sender.IP,
+			Requested:  len(keys),
+			Found:      count,
+			DurationMS: time.Since(start).Milliseconds(),
+			Error:      err.Error(),
+		})
+		appended = true
 		return s.generateResponseMessage(BatchGetValues, message.Sender, ResultFailed, err.Error())
 	}
 
@@ -974,6 +1016,16 @@ func (s *Network) handleGetValuesRequest(ctx context.Context, message *Message, 
 
 	// new a response message
 	resMsg := s.dht.newMessage(BatchGetValues, message.Sender, response)
+	s.appendRetrieveEntry(message.Sender.IP, RecentBatchRetrieveEntry{
+		TimeUnix:   time.Now().UTC().Unix(),
+		SenderID:   string(message.Sender.ID),
+		SenderIP:   message.Sender.IP,
+		Requested:  len(keys),
+		Found:      count,
+		DurationMS: time.Since(start).Milliseconds(),
+		Error:      "",
+	})
+	appended = true
 	return s.encodeMesage(resMsg)
 }
 
@@ -1145,15 +1197,38 @@ func findTopHeaviestKeys(dataMap map[string][]byte, size int) (int, []string) {
 }
 
 func (s *Network) handleBatchStoreData(ctx context.Context, message *Message) (res []byte, err error) {
+	start := time.Now()
+	appended := false
 	defer func() {
 		if response, err := s.handlePanic(ctx, message.Sender, BatchStoreData); response != nil || err != nil {
 			res = response
+			if !appended {
+				s.appendStoreEntry(message.Sender.IP, RecentBatchStoreEntry{
+					TimeUnix:   time.Now().UTC().Unix(),
+					SenderID:   string(message.Sender.ID),
+					SenderIP:   message.Sender.IP,
+					Keys:       0,
+					DurationMS: time.Since(start).Milliseconds(),
+					OK:         false,
+					Error:      "panic/recovered",
+				})
+			}
 		}
 	}()
 
 	request, ok := message.Data.(*BatchStoreDataRequest)
 	if !ok {
 		err := errors.New("invalid BatchStoreDataRequest")
+		s.appendStoreEntry(message.Sender.IP, RecentBatchStoreEntry{
+			TimeUnix:   time.Now().UTC().Unix(),
+			SenderID:   string(message.Sender.ID),
+			SenderIP:   message.Sender.IP,
+			Keys:       0,
+			DurationMS: time.Since(start).Milliseconds(),
+			OK:         false,
+			Error:      err.Error(),
+		})
+		appended = true
 		return s.generateResponseMessage(BatchStoreData, message.Sender, ResultFailed, err.Error())
 	}
 
@@ -1169,6 +1244,16 @@ func (s *Network) handleBatchStoreData(ctx context.Context, message *Message) (r
 
 	if err := s.dht.store.StoreBatch(ctx, request.Data, 1, false); err != nil {
 		err = errors.Errorf("batch store the data: %w", err)
+		s.appendStoreEntry(message.Sender.IP, RecentBatchStoreEntry{
+			TimeUnix:   time.Now().UTC().Unix(),
+			SenderID:   string(message.Sender.ID),
+			SenderIP:   message.Sender.IP,
+			Keys:       len(request.Data),
+			DurationMS: time.Since(start).Milliseconds(),
+			OK:         false,
+			Error:      err.Error(),
+		})
+		appended = true
 		return s.generateResponseMessage(BatchStoreData, message.Sender, ResultFailed, err.Error())
 	}
 
@@ -1186,6 +1271,16 @@ func (s *Network) handleBatchStoreData(ctx context.Context, message *Message) (r
 
 	// new a response message
 	resMsg := s.dht.newMessage(BatchStoreData, message.Sender, response)
+	s.appendStoreEntry(message.Sender.IP, RecentBatchStoreEntry{
+		TimeUnix:   time.Now().UTC().Unix(),
+		SenderID:   string(message.Sender.ID),
+		SenderIP:   message.Sender.IP,
+		Keys:       len(request.Data),
+		DurationMS: time.Since(start).Milliseconds(),
+		OK:         true,
+		Error:      "",
+	})
+	appended = true
 	return s.encodeMesage(resMsg)
 }
 
@@ -1429,4 +1524,43 @@ func readDeadlineFor(msgType int, overall time.Duration) time.Duration {
 	default:
 		return overall // Bulk responses keep full budget
 	}
+}
+
+// calcWriteDeadline returns a conservative write deadline based on payload size.
+// - targetMBps: assumed sustained throughput (lower = more lenient).
+// - We reserve some headroom from overall timeout for server processing/response.
+func calcWriteDeadline(timeout time.Duration, sizeBytes int, targetMBps float64) time.Duration {
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	// Leave headroom for server processing + response
+	const reserve = 8 * time.Second
+	maxBudget := timeout - reserve
+	if maxBudget < 5*time.Second {
+		maxBudget = timeout - 1*time.Second
+		if maxBudget < 3*time.Second {
+			maxBudget = 3 * time.Second
+		}
+	}
+
+	sizeMB := float64(sizeBytes) / (1024.0 * 1024.0)
+	base := 2 * time.Second
+	cushion := 5 * time.Second
+
+	// Softer floor: assume ~1 MB/s by default; increase if you like.
+	if targetMBps <= 0 {
+		targetMBps = 1.0
+	}
+	est := time.Duration(sizeMB / targetMBps * float64(time.Second))
+
+	writeDL := base + est + cushion
+
+	// Ensure a more generous minimum for big-ish payloads
+	if writeDL < 10*time.Second {
+		writeDL = 10 * time.Second
+	}
+	if writeDL > maxBudget {
+		writeDL = maxBudget
+	}
+	return writeDL
 }
