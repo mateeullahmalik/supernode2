@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	loadSymbolsBatchSize = 2500
+	loadSymbolsBatchSize = 480
 	storeSymbolsPercent  = 10
 	concurrency          = 1
 

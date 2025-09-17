@@ -41,13 +41,14 @@ const (
 	defaultDeleteDataInterval                   = 11 * time.Hour
 	delKeysCountThreshold                       = 10
 	lowSpaceThreshold                           = 50 // GB
-	batchStoreSize                              = 2500
-	storeSameSymbolsBatchConcurrency            = 3
-	storeSymbolsBatchConcurrency                = 3.0
-	minimumDataStoreSuccessRate                 = 75.0
+    // ~65 KB symbols × 480 ≈ ~30 MB per RPC
+    batchStoreSize                   = 480
+	storeSameSymbolsBatchConcurrency = 3
+	storeSymbolsBatchConcurrency     = 3.0
+	minimumDataStoreSuccessRate      = 75.0
 
 	maxIterations                  = 4
-	macConcurrentNetworkStoreCalls = 16
+	maxConcurrentNetworkStoreCalls = 16
 )
 
 // DHT represents the state of the queries node in the distributed hash table
@@ -1757,7 +1758,7 @@ func (s *DHT) IterateBatchStore(ctx context.Context, values [][]byte, typ int, i
 
 func (s *DHT) batchStoreNetwork(ctx context.Context, values [][]byte, nodes map[string]*Node, storageMap map[string][]int, typ int) chan *MessageWithError {
 	responses := make(chan *MessageWithError, len(nodes))
-	maxStore := macConcurrentNetworkStoreCalls
+	maxStore := maxConcurrentNetworkStoreCalls
 	if ln := len(nodes); ln < maxStore {
 		maxStore = ln
 	}
