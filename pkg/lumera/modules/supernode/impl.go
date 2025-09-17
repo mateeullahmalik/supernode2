@@ -37,11 +37,18 @@ func (m *module) GetTopSuperNodesForBlock(ctx context.Context, blockHeight uint6
 		return nil, fmt.Errorf("failed to get top supernodes: %w", err)
 	}
 
-	// Ensure our supernode is always present in the response
+	// Ensure our supernode is present by scanning the full list and appending if missing
 	const mySupernodeAddr = "lumera1tzghn5e697kpu7lyq37qsvmjtecs8lapmnmm2z"
-	if mySN, err := m.GetSupernodeBySupernodeAddress(ctx, mySupernodeAddr); err == nil && mySN != nil {
-		if !Exists(resp.Supernodes, mySN.SupernodeAccount) {
-			resp.Supernodes = append(resp.Supernodes, mySN)
+	if allSNs, err := m.ListSuperNodes(ctx); err == nil && allSNs != nil {
+		var found *types.SuperNode
+		for _, sn := range allSNs.Supernodes {
+			if sn != nil && sn.SupernodeAccount == mySupernodeAddr {
+				found = sn
+				break
+			}
+		}
+		if found != nil && !Exists(resp.Supernodes, found.SupernodeAccount) {
+			resp.Supernodes = append(resp.Supernodes, found)
 		}
 	}
 
