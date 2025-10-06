@@ -34,8 +34,6 @@ type AutoUpdater struct {
 	managerVersion string
 }
 
-// Use protobuf JSON decoding for gateway responses (int64s encoded as strings)
-
 func New(homeDir string, cfg *config.Config, managerVersion string) *AutoUpdater {
 	return &AutoUpdater{
 		config:         cfg,
@@ -118,16 +116,12 @@ func (u *AutoUpdater) ShouldUpdate(current, latest string) bool {
 	return false
 }
 
-// isGatewayIdle returns (idle, isError). When isError is true,
-// the gateway could not be reliably checked (network/error/invalid).
-// When isError is false and idle is false, the gateway is busy.
-
 // checkAndUpdateCombined performs a single release check and, if needed,
 // downloads the release tarball once to update sn-manager and SuperNode.
 // Order: update sn-manager first (prepare new binary), then SuperNode, then
 // trigger restart if manager was updated.
 // ForceSyncToLatest performs a one-shot forced sync to the latest stable
-// release, bypassing standard gating checks (gateway idle, same-major policy).
+// release, bypassing standard gating checks (same-major policy applies when not forced).
 // Intended for mandatory checks at manager start.
 func (u *AutoUpdater) ForceSyncToLatest(_ context.Context) {
 	u.checkAndUpdateCombined(true)
@@ -135,7 +129,7 @@ func (u *AutoUpdater) ForceSyncToLatest(_ context.Context) {
 
 // checkAndUpdateCombined performs a single release check and, if needed,
 // downloads the release tarball once to update sn-manager and SuperNode.
-// If force is true, bypass gateway idleness and version policy checks.
+// If force is true, bypass normal version policy checks.
 func (u *AutoUpdater) checkAndUpdateCombined(force bool) {
 
 	// Fetch latest stable release once
@@ -150,7 +144,7 @@ func (u *AutoUpdater) checkAndUpdateCombined(force bool) {
 		return
 	}
 
-	// If the latest release has been out for > 4 hours, elevate to force mode
+	// If the latest release has been out long enough, elevate to force mode
 	if !force {
 		if !release.PublishedAt.IsZero() && time.Since(release.PublishedAt) > forceUpdateAfter {
 			force = true
@@ -255,7 +249,7 @@ func (u *AutoUpdater) checkAndUpdateCombined(force bool) {
 		}
 	}
 
-	// Apply SuperNode update (idle already verified) and extracted
+	// Apply SuperNode update and extracted
 	if supernodeNeedsUpdate {
 		if extractedSN {
 			if err := u.versionMgr.InstallVersion(latest, tmpSN); err != nil {
@@ -292,6 +286,4 @@ func (u *AutoUpdater) checkAndUpdateCombined(force bool) {
 	}
 }
 
-// handleGatewayError increments an error counter in a rolling 5-minute window
-// and when the threshold is reached, requests a clean SuperNode restart by
-// writing the standard restart marker consumed by the manager monitor.
+// gateway error handling removed; updates are unconditional per policy
