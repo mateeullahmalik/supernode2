@@ -121,22 +121,16 @@ func runStart(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-    // Mandatory version sync on startup: ensure both sn-manager and SuperNode
-    // are at the latest stable release. If the manager binary was updated,
-    // exit intentionally so:
-    //  - Under systemd: unit restarts sn-manager (Restart=on-failure)
-    //  - Manual runs: user restarts explicitly after update
-    u := updater.New(home, cfg, appVersion)
-    // Best-effort: ignore panics from update code
-    var managerUpdated bool
-    func() {
-        defer func() { _ = recover() }()
-        managerUpdated = u.ForceSyncToLatest(context.Background())
-    }()
-    if managerUpdated {
-        log.Printf("Self-update applied, exiting for restart...")
-        os.Exit(3)
-    }
+	// Mandatory version sync on startup: ensure both sn-manager and SuperNode
+	// are at the latest stable release. This bypasses regular updater checks
+	// (gateway idleness, same-major policy) to guarantee a consistent baseline.
+	// Runs once before monitoring begins.
+	func() {
+		u := updater.New(home, cfg, appVersion)
+		// Do not block startup on failures; best-effort sync
+		defer func() { recover() }()
+		u.ForceSyncToLatest(context.Background())
+	}()
 
 	// Start auto-updater if enabled
 	var autoUpdater *updater.AutoUpdater
