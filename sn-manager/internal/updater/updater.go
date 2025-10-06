@@ -16,7 +16,7 @@ import (
 	"github.com/LumeraProtocol/supernode/v2/sn-manager/internal/github"
 	"github.com/LumeraProtocol/supernode/v2/sn-manager/internal/utils"
 	"github.com/LumeraProtocol/supernode/v2/sn-manager/internal/version"
-	"github.com/LumeraProtocol/supernode/v2/supernode/node/supernode/gateway"
+	"github.com/LumeraProtocol/supernode/v2/supernode/transport/gateway"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -163,16 +163,7 @@ func (u *AutoUpdater) isGatewayIdle() (bool, bool) {
 		return false, true
 	}
 
-	totalTasks := 0
-	for _, service := range status.RunningTasks {
-		totalTasks += int(service.TaskCount)
-	}
-
-	if totalTasks > 0 {
-		log.Printf("Gateway busy: %d running tasks", totalTasks)
-		return false, false
-	}
-
+	// TEMP: tasks are not available in the new gateway endpoint; skip busy-check
 	return true, false
 }
 
