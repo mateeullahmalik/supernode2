@@ -14,6 +14,7 @@ import (
 	pb "github.com/LumeraProtocol/supernode/v2/gen/supernode"
 	"github.com/LumeraProtocol/supernode/v2/sn-manager/internal/config"
 	"github.com/LumeraProtocol/supernode/v2/sn-manager/internal/github"
+	"github.com/LumeraProtocol/supernode/v2/sn-manager/internal/manager"
 	"github.com/LumeraProtocol/supernode/v2/sn-manager/internal/utils"
 	"github.com/LumeraProtocol/supernode/v2/sn-manager/internal/version"
 	"github.com/LumeraProtocol/supernode/v2/supernode/transport/gateway"
@@ -344,8 +345,16 @@ func (u *AutoUpdater) checkAndUpdateCombined(force bool) {
 	// If manager updated, restart service after completing all work
 	if managerUpdated {
 		log.Printf("Self-update applied, restarting service...")
+		// Attempt to gracefully stop SuperNode before exiting
+		if m, err := manager.New(u.homeDir); err == nil {
+			if m.IsRunning() {
+				if err := m.Stop(); err != nil {
+					log.Printf("Failed to stop SuperNode before restart: %v", err)
+				}
+			}
+		}
+		// Exit with code 3 to signal service restart
 		go func() {
-			time.Sleep(500 * time.Millisecond)
 			os.Exit(3)
 		}()
 	}
