@@ -123,25 +123,28 @@ func (u *AutoUpdater) ShouldUpdate(current, latest string) bool {
 // ForceSyncToLatest performs a one-shot forced sync to the latest stable
 // release, bypassing standard gating checks (same-major policy applies when not forced).
 // Intended for mandatory checks at manager start.
-func (u *AutoUpdater) ForceSyncToLatest(_ context.Context) {
-	u.checkAndUpdateCombined(true)
+// ForceSyncToLatest returns true if the manager binary was updated.
+func (u *AutoUpdater) ForceSyncToLatest(_ context.Context) bool {
+	return u.checkAndUpdateCombined(true)
 }
 
 // checkAndUpdateCombined performs a single release check and, if needed,
 // downloads the release tarball once to update sn-manager and SuperNode.
 // If force is true, bypass normal version policy checks.
-func (u *AutoUpdater) checkAndUpdateCombined(force bool) {
+// checkAndUpdateCombined performs one check + update cycle.
+// Returns true if the sn-manager binary itself was updated.
+func (u *AutoUpdater) checkAndUpdateCombined(force bool) bool {
 
 	// Fetch latest stable release once
 	release, err := u.githubClient.GetLatestStableRelease()
 	if err != nil {
 		log.Printf("Failed to check releases: %v", err)
-		return
+		return false
 	}
 
 	latest := strings.TrimSpace(release.TagName)
 	if latest == "" {
-		return
+		return false
 	}
 
 	// If the latest release has been out long enough, elevate to force mode
@@ -174,26 +177,26 @@ func (u *AutoUpdater) checkAndUpdateCombined(force bool) {
 	}
 
 	if !managerNeedsUpdate && !supernodeNeedsUpdate {
-		return
+		return false
 	}
 
 	// Download the combined release tarball once
 	tarURL, err := u.githubClient.GetReleaseTarballURL(latest)
 	if err != nil {
 		log.Printf("Failed to get tarball URL: %v", err)
-		return
+		return false
 	}
 	// Ensure downloads directory exists
 	downloadsDir := filepath.Join(u.homeDir, "downloads")
 	if err := os.MkdirAll(downloadsDir, 0755); err != nil {
 		log.Printf("Failed to create downloads directory: %v", err)
-		return
+		return false
 	}
 
 	tarPath := filepath.Join(downloadsDir, fmt.Sprintf("release-%s.tar.gz", latest))
 	if err := utils.DownloadFile(tarURL, tarPath, nil); err != nil {
 		log.Printf("Failed to download tarball: %v", err)
-		return
+		return false
 	}
 	defer func() {
 		if err := os.Remove(tarPath); err != nil && !os.IsNotExist(err) {
@@ -205,7 +208,7 @@ func (u *AutoUpdater) checkAndUpdateCombined(force bool) {
 	exePath, err := os.Executable()
 	if err != nil {
 		log.Printf("Cannot determine executable path: %v", err)
-		return
+		return false
 	}
 	exePath, _ = filepath.EvalSymlinks(exePath)
 	tmpManager := exePath + ".new"
@@ -223,7 +226,7 @@ func (u *AutoUpdater) checkAndUpdateCombined(force bool) {
 	found, err := utils.ExtractMultipleFromTarGz(tarPath, targets)
 	if err != nil {
 		log.Printf("Extraction error: %v", err)
-		return
+		return false
 	}
 
 	extractedManager := managerNeedsUpdate && found["sn-manager"]
@@ -276,14 +279,18 @@ func (u *AutoUpdater) checkAndUpdateCombined(force bool) {
 		}
 	}
 
-	// If manager updated, restart service after completing all work
+	// If manager updated: for forced path, let caller re-exec; for periodic path, self-exit
 	if managerUpdated {
+		if force {
+			return true
+		}
 		log.Printf("Self-update applied, restarting service...")
 		go func() {
 			time.Sleep(500 * time.Millisecond)
 			os.Exit(3)
 		}()
 	}
+	return managerUpdated
 }
 
 // gateway error handling removed; updates are unconditional per policy
