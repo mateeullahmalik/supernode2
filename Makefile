@@ -1,7 +1,8 @@
-.PHONY: build build-release build-sncli build-sn-manager
+.PHONY: build build-sncli build-sn-manager
 .PHONY: install-lumera setup-supernodes system-test-setup install-deps
 .PHONY: gen-cascade gen-supernode
 .PHONY: test-e2e test-unit test-integration test-system
+.PHONY: release
 
 # Build variables
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -22,11 +23,8 @@ SN_MANAGER_LDFLAGS = -X main.Version=$(VERSION) \
 
 build:
 	@mkdir -p release
-	CGO_ENABLED=1 \
-	GOOS=linux \
-	GOARCH=amd64 \
-	echo "Building supernode..."
-	go build \
+	@echo "Building supernode..."
+	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build \
 		-trimpath \
 		-ldflags="-s -w $(LDFLAGS)" \
 		-o release/supernode-linux-amd64 \
