@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -31,11 +33,6 @@ func New(homeDir string) (*Manager, error) {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load config: %w", err)
-	}
-
-	// Validate configuration
-	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid config: %w", err)
 	}
 
 	return &Manager{
@@ -65,12 +62,19 @@ func (m *Manager) Start(ctx context.Context) error {
 		return fmt.Errorf("supernode is already running")
 	}
 
+	// Ensure no orphaned SuperNode process is running from a previous manager.
+	if err := m.ensureCleanSupernode(); err != nil {
+		return err
+	}
+
 	// Prepare command
 	binary := m.GetSupernodeBinary()
 	// SuperNode will handle its own home directory and arguments
 	args := []string{"start"}
 
 	m.cmd = exec.CommandContext(ctx, binary, args...)
+	// Linux-only: ensure child receives SIGTERM if manager exits
+	m.cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGTERM}
 	m.cmd.Stdout = os.Stdout
 	m.cmd.Stderr = os.Stderr
 
@@ -175,9 +179,9 @@ func (m *Manager) cleanup() {
 const (
 	DefaultShutdownTimeout = 30 * time.Second
 	ProcessCheckInterval   = 5 * time.Second
-	CrashBackoffDelay     = 2 * time.Second
-	StopMarkerFile        = ".stop_requested"
-	RestartMarkerFile     = ".needs_restart"
+	CrashBackoffDelay      = 2 * time.Second
+	StopMarkerFile         = ".stop_requested"
+	RestartMarkerFile      = ".needs_restart"
 )
 
 // Monitor continuously supervises the SuperNode process
@@ -190,7 +194,7 @@ func (m *Manager) Monitor(ctx context.Context) error {
 
 	// Channel to monitor process exits
 	processExitCh := make(chan error, 1)
-	
+
 	// Function to arm the process wait goroutine
 	armProcessWait := func() {
 		processExitCh = make(chan error, 1)
@@ -209,6 +213,10 @@ func (m *Manager) Monitor(ctx context.Context) error {
 		// No stop marker, ensure SuperNode is running
 		if !m.IsRunning() {
 			log.Println("Starting SuperNode...")
+			// Enforce invariant before starting
+			if err := m.ensureCleanSupernode(); err != nil {
+				log.Printf("Failed to ensure clean state: %v", err)
+			}
 			if err := m.Start(ctx); err != nil {
 				log.Printf("Failed to start SuperNode: %v", err)
 			} else {
@@ -262,7 +270,7 @@ func (m *Manager) Monitor(ctx context.Context) error {
 
 		case <-ticker.C:
 			// Periodic check for various conditions
-			
+
 			// 1. Check if stop marker was removed and we should start
 			if !m.IsRunning() {
 				if _, err := os.Stat(stopMarkerPath); os.IsNotExist(err) {
@@ -281,16 +289,16 @@ func (m *Manager) Monitor(ctx context.Context) error {
 			if _, err := os.Stat(restartMarkerPath); err == nil {
 				if m.IsRunning() {
 					log.Println("Binary update detected, restarting SuperNode...")
-					
+
 					// Remove the restart marker
 					if err := os.Remove(restartMarkerPath); err != nil && !os.IsNotExist(err) {
 						log.Printf("Warning: failed to remove restart marker: %v", err)
 					}
-					
+
 					// Create temporary stop marker for clean restart
 					tmpStopMarker := []byte("update")
 					os.WriteFile(stopMarkerPath, tmpStopMarker, 0644)
-					
+
 					// Stop current process
 					if err := m.Stop(); err != nil {
 						log.Printf("Failed to stop for update: %v", err)
@@ -299,15 +307,15 @@ func (m *Manager) Monitor(ctx context.Context) error {
 						}
 						continue
 					}
-					
+
 					// Brief pause
 					time.Sleep(CrashBackoffDelay)
-					
+
 					// Remove temporary stop marker
 					if err := os.Remove(stopMarkerPath); err != nil && !os.IsNotExist(err) {
 						log.Printf("Warning: failed to remove stop marker: %v", err)
 					}
-					
+
 					// Start with new binary
 					log.Println("Starting with updated binary...")
 					if err := m.Start(ctx); err != nil {
@@ -325,7 +333,7 @@ func (m *Manager) Monitor(ctx context.Context) error {
 				m.mu.RLock()
 				proc := m.process
 				m.mu.RUnlock()
-				
+
 				if proc != nil {
 					if err := proc.Signal(syscall.Signal(0)); err != nil {
 						// Process is dead but not cleaned up
@@ -345,3 +353,70 @@ func (m *Manager) GetConfig() *config.Config {
 	return m.config
 }
 
+// ensureCleanSupernode terminates any existing SuperNode process that is not
+// owned by this sn-manager instance and clears a stale PID file.
+func (m *Manager) ensureCleanSupernode() error {
+	pidPath := filepath.Join(m.homeDir, "supernode.pid")
+	data, err := os.ReadFile(pidPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to read supernode PID file: %w", err)
+	}
+	pidStr := strings.TrimSpace(string(data))
+	pid, err := strconv.Atoi(pidStr)
+	if err != nil {
+		_ = os.Remove(pidPath)
+		return nil
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		_ = os.Remove(pidPath)
+		return nil
+	}
+	// Is alive?
+	if err := proc.Signal(syscall.Signal(0)); err != nil {
+		_ = os.Remove(pidPath)
+		return nil
+	}
+	// If parent is not this manager, treat as orphan and stop it
+	ppid := readPPidLinux(pid)
+	if ppid != os.Getpid() {
+		log.Printf("Found existing SuperNode process (PID %d, PPID %d). Stopping before start...", pid, ppid)
+		_ = proc.Signal(syscall.SIGTERM)
+		deadline := time.Now().Add(15 * time.Second)
+		for time.Now().Before(deadline) {
+			if err := proc.Signal(syscall.Signal(0)); err != nil {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if err := proc.Signal(syscall.Signal(0)); err == nil {
+			_ = proc.Kill()
+			time.Sleep(300 * time.Millisecond)
+		}
+		_ = os.Remove(pidPath)
+	}
+	return nil
+}
+
+// readPPidLinux returns the parent process ID for a given pid (Linux /proc).
+func readPPidLinux(pid int) int {
+	statusPath := fmt.Sprintf("/proc/%d/status", pid)
+	b, err := os.ReadFile(statusPath)
+	if err != nil {
+		return 0
+	}
+	for _, ln := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(ln, "PPid:") {
+			parts := strings.Fields(ln)
+			if len(parts) >= 2 {
+				if v, err := strconv.Atoi(parts[1]); err == nil {
+					return v
+				}
+			}
+		}
+	}
+	return 0
+}
