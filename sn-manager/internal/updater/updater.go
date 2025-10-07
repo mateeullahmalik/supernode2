@@ -19,12 +19,12 @@ import (
 // Global updater timing constants
 const (
 	// gatewayTimeout bounds the local gateway status probe
-	gatewayTimeout = 15 * time.Second
+	// gatewayTimeout = 15 * time.Second
 	// updateCheckInterval is how often the periodic updater runs
-	updateCheckInterval = 2 * time.Minute
+	updateCheckInterval = 5 * time.Minute
 	// forceUpdateAfter is the age threshold after a release is published
 	// beyond which updates are applied regardless of normal gates (idle, policy)
-	forceUpdateAfter = 30 * time.Minute
+	forceUpdateAfter = 10 * time.Minute
 )
 
 type AutoUpdater struct {
