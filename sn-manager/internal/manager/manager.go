@@ -28,6 +28,7 @@ type Manager struct {
 func New(homeDir string) (*Manager, error) {
 	// Load configuration
 	configPath := filepath.Join(homeDir, "config.yml")
+	log.Printf("Loading sn-manager config from %s", configPath)
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load config: %w", err)
@@ -37,6 +38,7 @@ func New(homeDir string) (*Manager, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
+	log.Printf("Configuration loaded and validated; manager home=%s", homeDir)
 
 	return &Manager{
 		config:  cfg,
@@ -49,10 +51,12 @@ func (m *Manager) GetSupernodeBinary() string {
 	// Use the current symlink managed by sn-manager
 	currentLink := filepath.Join(m.homeDir, "current", "supernode")
 	if _, err := os.Stat(currentLink); err == nil {
+		log.Printf("Using managed supernode binary at path=%s", currentLink)
 		return currentLink
 	}
 
 	// Fallback to system binary if no managed version exists
+	log.Printf("Managed supernode binary not found; falling back to system 'supernode' in PATH")
 	return "supernode"
 }
 
@@ -74,6 +78,8 @@ func (m *Manager) Start(ctx context.Context) error {
 	m.cmd.Stdout = os.Stdout
 	m.cmd.Stderr = os.Stderr
 
+	log.Printf("Launching SuperNode binary=%s args=%v", binary, args)
+
 	// Start the process
 	if err := m.cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start supernode: %w", err)
@@ -86,6 +92,8 @@ func (m *Manager) Start(ctx context.Context) error {
 	pidPath := filepath.Join(m.homeDir, "supernode.pid")
 	if err := os.WriteFile(pidPath, []byte(fmt.Sprintf("%d", m.process.Pid)), 0644); err != nil {
 		log.Printf("Warning: failed to save PID file: %v", err)
+	} else {
+		log.Printf("Saved PID file at %s", pidPath)
 	}
 
 	log.Printf("SuperNode started with PID %d", m.process.Pid)
@@ -104,13 +112,16 @@ func (m *Manager) Stop() error {
 	log.Printf("Stopping SuperNode (PID %d)...", m.process.Pid)
 
 	// Send SIGTERM for graceful shutdown
+	log.Printf("Requesting graceful shutdown via SIGTERM")
 	if err := m.process.Signal(syscall.SIGTERM); err != nil {
 		return fmt.Errorf("failed to send SIGTERM: %w", err)
 	}
 
 	// Poll for graceful shutdown with timeout without calling Wait to avoid double-wait
 	timeout := DefaultShutdownTimeout
+	log.Printf("Waiting up to timeout=%s for graceful shutdown", timeout)
 	deadline := time.Now().Add(timeout)
+	stopStart := time.Now()
 	for time.Now().Before(deadline) {
 		if err := m.process.Signal(syscall.Signal(0)); err != nil {
 			// Process no longer exists
@@ -128,6 +139,7 @@ func (m *Manager) Stop() error {
 
 	// Cleanup
 	m.cleanup()
+	log.Printf("SuperNode stop completed in %s", time.Since(stopStart).Truncate(time.Millisecond))
 	log.Printf("SuperNode stopped")
 	return nil
 }
@@ -150,12 +162,20 @@ func (m *Manager) IsRunning() bool {
 func (m *Manager) Wait() error {
 	m.mu.RLock()
 	cmd := m.cmd
+	pid := -1
+	if m.process != nil {
+		pid = m.process.Pid
+	}
 	m.mu.RUnlock()
 
 	if cmd == nil {
 		return fmt.Errorf("no process running")
 	}
-
+	if pid > 0 {
+		log.Printf("Waiting for SuperNode process to exit (PID %d)", pid)
+	} else {
+		log.Printf("Waiting for SuperNode process to exit (PID unknown)")
+	}
 	return cmd.Wait()
 }
 
@@ -166,6 +186,7 @@ func (m *Manager) cleanup() {
 
 	// Remove PID file
 	pidPath := filepath.Join(m.homeDir, "supernode.pid")
+	log.Printf("Cleaning up; removing PID file at %s", pidPath)
 	if err := os.Remove(pidPath); err != nil && !os.IsNotExist(err) {
 		log.Printf("Warning: failed to remove PID file: %v", err)
 	}
@@ -175,22 +196,22 @@ func (m *Manager) cleanup() {
 const (
 	DefaultShutdownTimeout = 30 * time.Second
 	ProcessCheckInterval   = 5 * time.Second
-	CrashBackoffDelay     = 2 * time.Second
-	StopMarkerFile        = ".stop_requested"
-	RestartMarkerFile     = ".needs_restart"
+	CrashBackoffDelay      = 2 * time.Second
+	StopMarkerFile         = ".stop_requested"
+	RestartMarkerFile      = ".needs_restart"
 )
 
 // Monitor continuously supervises the SuperNode process
 // It ensures SuperNode is always running unless a stop marker is present
 func (m *Manager) Monitor(ctx context.Context) error {
-
+	log.Printf("Monitor started home=%s interval=%s", m.homeDir, ProcessCheckInterval)
 	// Create ticker for periodic checks
 	ticker := time.NewTicker(ProcessCheckInterval)
 	defer ticker.Stop()
 
 	// Channel to monitor process exits
 	processExitCh := make(chan error, 1)
-	
+
 	// Function to arm the process wait goroutine
 	armProcessWait := func() {
 		processExitCh = make(chan error, 1)
@@ -201,6 +222,7 @@ func (m *Manager) Monitor(ctx context.Context) error {
 				processExitCh <- nil
 			}
 		}()
+		log.Printf("Process wait armed")
 	}
 
 	// Initial check and start if needed
@@ -231,10 +253,14 @@ func (m *Manager) Monitor(ctx context.Context) error {
 
 		case err := <-processExitCh:
 			// SuperNode process exited
+			m.mu.RLock()
+			started := m.startTime
+			m.mu.RUnlock()
+			uptime := time.Since(started).Truncate(time.Millisecond)
 			if err != nil {
-				log.Printf("SuperNode exited with error: %v", err)
+				log.Printf("SuperNode exited with error: %v (uptime=%s)", err, uptime)
 			} else {
-				log.Printf("SuperNode exited normally")
+				log.Printf("SuperNode exited normally (uptime=%s)", uptime)
 			}
 
 			// Cleanup internal state after exit
@@ -249,6 +275,7 @@ func (m *Manager) Monitor(ctx context.Context) error {
 			}
 
 			// Apply backoff to prevent rapid restart loops
+			log.Printf("Backoff before restart: %s", CrashBackoffDelay)
 			time.Sleep(CrashBackoffDelay)
 
 			// Restart SuperNode
@@ -262,7 +289,7 @@ func (m *Manager) Monitor(ctx context.Context) error {
 
 		case <-ticker.C:
 			// Periodic check for various conditions
-			
+
 			// 1. Check if stop marker was removed and we should start
 			if !m.IsRunning() {
 				if _, err := os.Stat(stopMarkerPath); os.IsNotExist(err) {
@@ -281,16 +308,20 @@ func (m *Manager) Monitor(ctx context.Context) error {
 			if _, err := os.Stat(restartMarkerPath); err == nil {
 				if m.IsRunning() {
 					log.Println("Binary update detected, restarting SuperNode...")
-					
+
 					// Remove the restart marker
 					if err := os.Remove(restartMarkerPath); err != nil && !os.IsNotExist(err) {
 						log.Printf("Warning: failed to remove restart marker: %v", err)
 					}
-					
+
 					// Create temporary stop marker for clean restart
 					tmpStopMarker := []byte("update")
-					os.WriteFile(stopMarkerPath, tmpStopMarker, 0644)
-					
+					if err := os.WriteFile(stopMarkerPath, tmpStopMarker, 0644); err != nil {
+						log.Printf("Warning: failed to write temporary stop marker: %v", err)
+					} else {
+						log.Printf("Temporary stop marker written at %s for update", stopMarkerPath)
+					}
+
 					// Stop current process
 					if err := m.Stop(); err != nil {
 						log.Printf("Failed to stop for update: %v", err)
@@ -299,15 +330,18 @@ func (m *Manager) Monitor(ctx context.Context) error {
 						}
 						continue
 					}
-					
+
 					// Brief pause
+					log.Printf("Pause before restart after update: %s", CrashBackoffDelay)
 					time.Sleep(CrashBackoffDelay)
-					
+
 					// Remove temporary stop marker
 					if err := os.Remove(stopMarkerPath); err != nil && !os.IsNotExist(err) {
 						log.Printf("Warning: failed to remove stop marker: %v", err)
+					} else {
+						log.Printf("Temporary stop marker removed")
 					}
-					
+
 					// Start with new binary
 					log.Println("Starting with updated binary...")
 					if err := m.Start(ctx); err != nil {
@@ -325,7 +359,7 @@ func (m *Manager) Monitor(ctx context.Context) error {
 				m.mu.RLock()
 				proc := m.process
 				m.mu.RUnlock()
-				
+
 				if proc != nil {
 					if err := proc.Signal(syscall.Signal(0)); err != nil {
 						// Process is dead but not cleaned up
@@ -344,4 +378,3 @@ func (m *Manager) Monitor(ctx context.Context) error {
 func (m *Manager) GetConfig() *config.Config {
 	return m.config
 }
-

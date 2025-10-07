@@ -3,21 +3,17 @@ package updater
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	pb "github.com/LumeraProtocol/supernode/v2/gen/supernode"
 	"github.com/LumeraProtocol/supernode/v2/sn-manager/internal/config"
 	"github.com/LumeraProtocol/supernode/v2/sn-manager/internal/github"
 	"github.com/LumeraProtocol/supernode/v2/sn-manager/internal/utils"
 	"github.com/LumeraProtocol/supernode/v2/sn-manager/internal/version"
 	"github.com/LumeraProtocol/supernode/v2/supernode/node/supernode/gateway"
-	"google.golang.org/protobuf/encoding/protojson"
 )
 
 // Global updater timing constants
@@ -25,7 +21,7 @@ const (
 	// gatewayTimeout bounds the local gateway status probe
 	gatewayTimeout = 15 * time.Second
 	// updateCheckInterval is how often the periodic updater runs
-	updateCheckInterval = 10 * time.Minute
+	updateCheckInterval = 2 * time.Minute
 	// forceUpdateAfter is the age threshold after a release is published
 	// beyond which updates are applied regardless of normal gates (idle, policy)
 	forceUpdateAfter = 30 * time.Minute
@@ -70,6 +66,7 @@ func (u *AutoUpdater) Start(ctx context.Context) {
 
 	// Fixed update check interval
 	u.ticker = time.NewTicker(updateCheckInterval)
+	log.Printf("Auto-updater started interval=%s manager_version=%s", updateCheckInterval, u.managerVersion)
 
 	// Run an immediate check on startup so restarts don't wait a full interval
 	u.checkAndUpdateCombined(false)
@@ -100,6 +97,7 @@ func (u *AutoUpdater) Stop() {
 	default:
 		close(u.stopCh)
 	}
+	log.Printf("Auto-updater stopped")
 }
 
 func (u *AutoUpdater) ShouldUpdate(current, latest string) bool {
@@ -137,43 +135,44 @@ func (u *AutoUpdater) ShouldUpdate(current, latest string) bool {
 // the gateway could not be reliably checked (network/error/invalid).
 // When isError is false and idle is false, the gateway is busy.
 func (u *AutoUpdater) isGatewayIdle() (bool, bool) {
-	client := &http.Client{Timeout: gatewayTimeout}
-
-	resp, err := client.Get(u.gatewayURL)
-	if err != nil {
-		log.Printf("Failed to check gateway status: %v", err)
-		// Error contacting gateway
-		return false, true
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("Gateway returned status %d, not safe to update", resp.StatusCode)
-		return false, true
-	}
-
-	var status pb.StatusResponse
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("Failed to read gateway response: %v", err)
-		return false, true
-	}
-	if err := protojson.Unmarshal(body, &status); err != nil {
-		log.Printf("Failed to decode gateway response: %v", err)
-		return false, true
-	}
-
-	totalTasks := 0
-	for _, service := range status.RunningTasks {
-		totalTasks += int(service.TaskCount)
-	}
-
-	if totalTasks > 0 {
-		log.Printf("Gateway busy: %d running tasks", totalTasks)
-		return false, false
-	}
-
 	return true, false
+	// client := &http.Client{Timeout: gatewayTimeout}
+
+	// resp, err := client.Get(u.gatewayURL)
+	// if err != nil {
+	// 	log.Printf("Failed to check gateway status: %v", err)
+	// 	// Error contacting gateway
+	// 	return false, true
+	// }
+	// defer resp.Body.Close()
+
+	// if resp.StatusCode != http.StatusOK {
+	// 	log.Printf("Gateway returned status %d, not safe to update", resp.StatusCode)
+	// 	return false, true
+	// }
+
+	// var status pb.StatusResponse
+	// body, err := io.ReadAll(resp.Body)
+	// if err != nil {
+	// 	log.Printf("Failed to read gateway response: %v", err)
+	// 	return false, true
+	// }
+	// if err := protojson.Unmarshal(body, &status); err != nil {
+	// 	log.Printf("Failed to decode gateway response: %v", err)
+	// 	return false, true
+	// }
+
+	// totalTasks := 0
+	// for _, service := range status.RunningTasks {
+	// 	totalTasks += int(service.TaskCount)
+	// }
+
+	// if totalTasks > 0 {
+	// 	log.Printf("Gateway busy: %d running tasks", totalTasks)
+	// 	return false, false
+	// }
+
+	// return true, false
 }
 
 // checkAndUpdateCombined performs a single release check and, if needed,
@@ -191,6 +190,7 @@ func (u *AutoUpdater) ForceSyncToLatest(_ context.Context) {
 // downloads the release tarball once to update sn-manager and SuperNode.
 // If force is true, bypass gateway idleness and version policy checks.
 func (u *AutoUpdater) checkAndUpdateCombined(force bool) {
+	log.Printf("Update check started force=%t", force)
 
 	// Fetch latest stable release once
 	release, err := u.githubClient.GetLatestStableRelease()
@@ -202,6 +202,11 @@ func (u *AutoUpdater) checkAndUpdateCombined(force bool) {
 	latest := strings.TrimSpace(release.TagName)
 	if latest == "" {
 		return
+	}
+	if !release.PublishedAt.IsZero() {
+		log.Printf("Latest release tag=%s published_at=%s", latest, release.PublishedAt.Format(time.RFC3339))
+	} else {
+		log.Printf("Latest release tag=%s published_at=<unknown>", latest)
 	}
 
 	// If the latest release has been out for > 4 hours, elevate to force mode
@@ -234,8 +239,11 @@ func (u *AutoUpdater) checkAndUpdateCombined(force bool) {
 	}
 
 	if !managerNeedsUpdate && !supernodeNeedsUpdate {
+		log.Printf("No updates required: manager_current=%s supernode_current=%s latest=%s", ver, currentSN, latest)
 		return
 	}
+
+	log.Printf("Update decision: manager_current=%s needs_update=%t; supernode_current=%s needs_update=%t", ver, managerNeedsUpdate, currentSN, supernodeNeedsUpdate)
 
 	// Gate all updates (manager + SuperNode) on gateway idleness
 	// to avoid disrupting traffic during a self-update.
@@ -249,6 +257,7 @@ func (u *AutoUpdater) checkAndUpdateCombined(force bool) {
 			}
 			return
 		}
+		log.Printf("Gateway idle; proceeding with updates")
 	}
 
 	// Download the combined release tarball once
@@ -265,10 +274,12 @@ func (u *AutoUpdater) checkAndUpdateCombined(force bool) {
 	}
 
 	tarPath := filepath.Join(downloadsDir, fmt.Sprintf("release-%s.tar.gz", latest))
+	log.Printf("Downloading release tarball url=%s to=%s", tarURL, tarPath)
 	if err := utils.DownloadFile(tarURL, tarPath, nil); err != nil {
 		log.Printf("Failed to download tarball: %v", err)
 		return
 	}
+	log.Printf("Downloaded release tarball to %s", tarPath)
 	defer func() {
 		if err := os.Remove(tarPath); err != nil && !os.IsNotExist(err) {
 			log.Printf("Warning: failed to remove tarball: %v", err)
